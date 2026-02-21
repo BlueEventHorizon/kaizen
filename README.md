@@ -20,7 +20,7 @@ Inside a Claude Code session:
 
 ```
 /plugin marketplace add BlueEventHorizon/bw-cc-plugins
-/plugin install kaizen@BlueEventHorizon/bw-cc-plugins
+/plugin install kaizen@bw-cc-plugins
 ```
 
 <img src="./images/install_kaizen.png" width="900">
@@ -41,7 +41,7 @@ claude --plugin-dir ./bw-cc-plugins/plugins/kaizen
 From your terminal:
 
 ```bash
-claude plugin update kaizen@BlueEventHorizon/bw-cc-plugins --scope local
+claude plugin update kaizen@bw-cc-plugins --scope local
 ```
 
 ## Usage
