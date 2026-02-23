@@ -18,7 +18,7 @@
     {
       "name": "doc-structure",
       "description": "Define and query project document structure (.doc_structure.yaml)",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "author": {
         "name": "moons"
       },

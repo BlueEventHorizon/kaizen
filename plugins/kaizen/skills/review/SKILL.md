@@ -42,52 +42,62 @@ description: |
 
 ### Phase 1: 引数解析と環境確認
 
-1. `$ARGUMENTS` を解析:
-   - 最初の単語 → 種別（`requirement` | `design` | `code` | `plan` | `generic`）
-   - `--codex` または `--claude` → エンジン指定
-   - `--auto-fix` → 自動修正モード
-   - 残り → 対象（ファイルパス(複数可) / Feature名 / ディレクトリ）
-     - スペース区切りで複数のファイルパスを指定可能
+#### Step 1: .doc_structure.yaml の存在確認 [MANDATORY]
 
-2. **パラメータ補完**（引数が不完全な場合）:
+`.doc_structure.yaml` がプロジェクトルートに存在するか確認する。
+**全種別（code / requirement / design / plan / generic）で必須。**
 
-   種別または対象が未指定の場合、以下の順で補完を試みる:
+- **存在する** → Step 2 へ
+- **存在しない** → `/doc-structure:init-doc-structure` を起動して作成を促す
+  - 作成された → Step 2 へ
+  - 作成されなかった → **エラー終了**。以降の処理は実行しない。
+    ```
+    Error: .doc_structure.yaml が見つかりません。
+    レビューを実行するには .doc_structure.yaml が必要です。
+    /doc-structure:init-doc-structure を実行して作成してください。
+    ```
 
-   a. **resolve_review_context.py の結果を利用**（Phase 1.5）
-      - スクリプトが種別を判定できた場合、その結果を推奨として使用
+#### Step 2: 引数解析
 
-   b. **会話コンテキストからの推論**（スクリプトで解決できない場合）
-      - 直前に作成・編集・議論していたファイルから種別と対象を推定
-      - 例: SKILL.md を編集中 → generic + そのファイルパスを推定
-      - 例: 要件定義書を作成直後 → requirement + 作成ファイルを推定
+`$ARGUMENTS` を解析:
+- 最初の単語 → 種別（`requirement` | `design` | `code` | `plan` | `generic`）
+- `--codex` または `--claude` → エンジン指定
+- `--auto-fix` → 自動修正モード
+- 残り → 対象（ファイルパス(複数可) / Feature名 / ディレクトリ）
+  - スペース区切りで複数のファイルパスを指定可能
 
-   c. **推奨の提示**（推論できた場合、ユーザー確認必須）
-      推論結果は確定ではなく**推奨**として提示し、ユーザーの承認を得る:
-      ```
-      以下の設定でレビューを実行します:
-      - 種別: generic
-      - 対象: docs/CONTRIBUTING.md, docs/README.md
-      - エンジン: Codex
-      → はい / 変更する
-      ```
+#### Step 3: パラメータ補完（引数が不完全な場合）
 
-   d. **推論不可の場合** → ユーザーに確認（現状通り）
+種別または対象が未指定の場合、以下の順で補完を試みる:
 
-3. **エンジン確認**:
-   - `--claude` 指定 → Claude を使用
-   - `--codex` 指定、または省略 → `which codex` を実行
-     - 存在する → Codex を使用
-     - 存在しない → Claude にフォールバック、「Codex が見つからないため Claude で実行します」と通知
+a. **resolve_review_context.py の結果を利用**（Phase 1.5）
+   - スクリプトが種別を判定できた場合、その結果を推奨として使用
 
-4. **環境確認**（順に実行し、利用可能な機能セットを決定）:
+b. **会話コンテキストからの推論**（スクリプトで解決できない場合）
+   - 直前に作成・編集・議論していたファイルから種別と対象を推定
+   - 例: SKILL.md を編集中 → generic + そのファイルパスを推定
+   - 例: 要件定義書を作成直後 → requirement + 作成ファイルを推定
+
+c. **推奨の提示**（推論できた場合、ユーザー確認必須）
+   推論結果は確定ではなく**推奨**として提示し、ユーザーの承認を得る:
    ```
-   1. which codex → エンジン決定
-   2. .doc_structure.yaml の存在確認
-      - なければ /doc-structure:init-doc-structure を起動し作成を促す
-      - 作成されなければエラー終了
-   3. レビュー観点定義の探索（後述「レビュー観点の探索」参照）
-   4. 不足があればユーザーに通知（何が使えて何が使えないか）
+   以下の設定でレビューを実行します:
+   - 種別: generic
+   - 対象: docs/CONTRIBUTING.md, docs/README.md
+   - エンジン: Codex
+   → はい / 変更する
    ```
+
+d. **推論不可の場合** → ユーザーに確認（現状通り）
+
+#### Step 4: エンジン確認
+
+- `--claude` 指定 → Claude を使用
+- `--codex` 指定、または省略 → `which codex` を実行
+  - 存在する → Codex を使用
+  - 存在しない → Claude にフォールバック、「Codex が見つからないため Claude で実行します」と通知
+
+#### Step 5: レビュー観点の探索（後述 [MANDATORY] セクション参照）
 
 #### レビュー観点の探索 [MANDATORY]
 

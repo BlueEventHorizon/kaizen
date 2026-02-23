@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Claude Code プラグインのマーケットプレイスリポジトリ。2つのプラグインを格納・配布する。
 
-- **kaizen** (v0.0.2) — AI を活用したコード・文書レビュー。段階的提示と自動修正に対応
-- **doc-structure** (v0.0.1) — `.doc_structure.yaml` によるプロジェクト文書構成の定義・クエリ
+- **kaizen** (v0.0.3) — AI を活用したコード・文書レビュー。段階的提示と自動修正に対応
+- **doc-structure** (v0.0.3) — `.doc_structure.yaml` によるプロジェクト文書構成の定義・クエリ
 
 ## Development
 
@@ -31,8 +31,8 @@ claude --plugin-dir ./plugins/doc-structure
 # レビュー対象の自動検出
 python3 plugins/kaizen/skills/review/scripts/resolve_review_context.py [対象パス]
 
-# ディレクトリ自動分類
-python3 plugins/doc-structure/scripts/classify_dirs.py [プロジェクトルート] --format summary
+# ディレクトリスキャン（メタデータ JSON 出力）
+python3 plugins/doc-structure/scripts/classify_dirs.py [プロジェクトルート]
 ```
 
 ## Architecture
@@ -62,7 +62,7 @@ review スキルがレビュー観点を探索する優先順位：
 
 ### doc-structure プラグイン
 
-`classify_dirs.py` がプロジェクトのディレクトリを自動分類（front matter doc_type → ディレクトリ名ヒューリスティック → 用語ランキングの3段階）し、`.doc_structure.yaml` を生成する。`/doc-structure:where` で他のスキルがパス情報を問い合わせ可能。
+`classify_dirs.py` がプロジェクトの .md ディレクトリを発見し、メタデータ（ファイル数、frontmatter 等）を JSON で出力する。分類判定（category / doc_type）は AI が SKILL.md 内のルールに従って行う。`/doc-structure:where` で他のスキルがパス情報を問い合わせ可能。
 
 ## Conventions
 

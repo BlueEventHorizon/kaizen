@@ -2,19 +2,18 @@
 name: init-doc-structure
 description: |
   Create or update .doc_structure.yaml for the current project.
-  Scans directories, classifies them as rules/specs with doc_type, and generates the file interactively.
+  Scans directories for markdown files, then AI classifies them as rules/specs with doc_type interactively.
   Trigger: "init doc structure", "create doc structure", "setup document structure"
 user-invocable: true
-argument-hint: "[--auto] (skip confirmation prompts)"
+argument-hint: ""
 ---
 
 # /doc-structure:init-doc-structure
 
 ## Overview
 
-Interactively create or update `.doc_structure.yaml` at the project root.
-This file declares where different types of documents live, enabling other tools
-(Doc Advisor, kaizen, planning skills, etc.) to find and create documents.
+対話的に `.doc_structure.yaml` をプロジェクトルートに作成・更新する。
+このファイルはドキュメントの所在を宣言し、他のツール（Doc Advisor, kaizen 等）がドキュメントを参照できるようにする。
 
 ## EXECUTION RULES
 - Exit plan mode if active. Do NOT ask for confirmation about plan mode.
@@ -22,76 +21,73 @@ This file declares where different types of documents live, enabling other tools
 
 ## Procedure
 
-### Step 0: 引数解析
+### Step 1: 既存ファイルの確認
 
-`$ARGUMENTS` を解析する:
-- `--auto` を検索（単語単位: 完全一致）
-  - 見つかった場合 → 自動モード（Step 3 の対話的確認をスキップ）
-- その他の引数 → 無視（将来の拡張用に予約）
+`.doc_structure.yaml` がプロジェクトルートに存在するか確認する。
 
-引数例:
-- `/doc-structure:init-doc-structure` → 対話モード
-- `/doc-structure:init-doc-structure --auto` → 自動モード
+- **存在する** → 現在の内容を表示し、更新するか再生成するかユーザーに確認。
+- **存在しない** → Step 2 へ。
 
-### Step 1: Check existing file
+### Step 2: ディレクトリスキャン
 
-Read `.doc_structure.yaml` at the project root.
-
-- **Exists**: Show current content, ask if user wants to update or regenerate.
-- **Not exists**: Proceed to Step 2.
-
-### Step 2: Run classification script
-
-Determine the plugin scripts directory:
-- If running as a plugin: use the plugin's `scripts/` directory
-- Fallback: search for `classify_dirs.py` in common locations
+スクリプトのディレクトリを特定する:
+- プラグインとして実行中: プラグインの `scripts/` ディレクトリを使用
+- フォールバック: `classify_dirs.py` を一般的な場所から検索
 
 ```bash
-python3 <scripts_dir>/classify_dirs.py --format summary
+python3 <scripts_dir>/classify_dirs.py
 ```
 
-Show the classification result to the user.
+スキャン結果（JSON）を取得する。`readme_only: true` のディレクトリは分類対象外としてスキップする。
 
-### Step 3: Interactive refinement
+### Step 3: AI による分類判定 [MANDATORY]
 
-Present the detected structure and ask the user to confirm or adjust:
+同ディレクトリの `classification_rules.md` を Read し、そのルールに従ってスキャン結果の各ディレクトリに category と doc_type を割り当てる。
 
-1. **Category confirmation**: Are these directories correctly classified as rules/specs?
-2. **Doc type confirmation**: Are the doc_type names correct? (requirement, design, plan, rule, etc.)
-3. **Missing directories**: Are there additional document directories to include?
-4. **Directories to remove**: Should any detected directories be excluded from the structure entirely?
-5. **Exclude patterns**: For doc_types with glob paths (`*`), show expanded results and ask if any matched directories should be excluded.
-   - Example presentation:
-     ```
-     specs/requirement の paths: ["specs/*/requirements/"]
-     展開結果:
-       specs/login/requirements/
-       specs/auth/requirements/
-       specs/archived/requirements/
-       specs/_template/requirements/
-
-     除外するディレクトリ名はありますか？（例: archived, _template）
-     ```
-   - User response → `exclude` field に追加
-   - Glob paths がない doc_type はこのステップをスキップ
-
-If `--auto` argument is provided, skip confirmation and use detected results directly.
-
-### Step 4: Generate .doc_structure.yaml
-
-Based on confirmed structure, generate the file:
-
-```bash
-python3 <scripts_dir>/classify_dirs.py --format doc_structure
+**進捗表示 [MANDATORY]**: 各ディレクトリの判定ごとに結果をユーザーに表示すること。
+```
+分類中...
+  rules/ → rules / rule
+  specs/core/requirements/ → specs / requirement
+  specs/core/design/ → specs / design
+  ...
 ```
 
-Or construct manually from user's refined input.
+### Step 4: 対話的確認
 
-Write the result to `.doc_structure.yaml` at the project root.
+分類結果をユーザーに提示し、確認・調整を求める:
 
-### Step 5: Show result
+分類結果を番号付き一覧で提示する。glob パスは展開結果も表示する。
 
-Display the generated file content and suggest next steps:
+提示例:
+```
+分類結果:
+  1. rules / rule       → rules/
+  2. specs / requirement → specs/*/requirements/
+     - specs/login/requirements/
+     - specs/auth/requirements/
+     - specs/archived/requirements/ *exclude*
+     - specs/_template/requirements/
+  3. specs / design      → specs/*/design/
+     - specs/login/design/
+     - specs/auth/design/
+  4. specs / plan        → specs/*/plan/
+  5. specs / reference   → specs/shared/, specs/issues/
+
+修正・除外したいものはありますか？（例: "archived除外", "5をspecに変更"）
+```
+
+- ディレクトリ名（例: "archived除外"）→ 該当する glob パスの `exclude` に追加
+- 分類番号（例: "5をspecに変更"）→ category や doc_type を修正
+- 問題なければそのまま次へ進む
+
+### Step 5: .doc_structure.yaml の生成
+
+確定した分類結果から `.doc_structure.yaml` を生成し、プロジェクトルートに書き出す。
+
+### Step 6: 結果表示
+
+生成したファイルの内容を表示し、次のステップを案内する:
 
 ```
 .doc_structure.yaml created successfully.
@@ -101,6 +97,8 @@ Next steps:
 - If using Doc Advisor: run /classify-docs to sync config.yaml
 - Commit .doc_structure.yaml to version control
 ```
+
+---
 
 ## Schema Reference
 
@@ -123,13 +121,13 @@ rules:
     exclude: ["<dir_name>", ...]  # optional
 ```
 
-### Recommended doc_type names
+### 推奨 doc_type 名
 
 | Category | Name | Description |
 |----------|------|-------------|
-| specs | requirement | Requirements documents |
-| specs | design | Design documents |
-| specs | plan | Implementation plans |
-| rules | rule | Development rules and standards |
-| rules | workflow | Workflow procedures |
-| rules | guide | Best practices, how-to guides |
+| specs | requirement | 要件定義書 |
+| specs | design | 設計書 |
+| specs | plan | 実装計画書 |
+| specs | api | API 仕様書 |
+| specs | reference | 参考資料 |
+| rules | rule | 開発ルール・規約・標準・ワークフロー・ガイド |

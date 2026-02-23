@@ -2,8 +2,7 @@
 """
 classify_dirs.py のテスト
 
-ディレクトリ自動分類ロジック、front matter パース、doc_type 推定、
-集約、出力フォーマットをテストする。
+ディレクトリスキャン、front matter パース、メタデータ収集をテストする。
 標準ライブラリのみ使用。
 
 実行:
@@ -11,6 +10,7 @@ classify_dirs.py のテスト
 """
 
 import io
+import json
 import os
 import shutil
 import sys
@@ -26,22 +26,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]
 from classify_dirs import (
     SKIP_DIRS,
     SKIP_INDICATORS,
-    DOC_TYPE_NAMES,
     extract_front_matter,
-    classify_by_frontmatter,
-    classify_by_dirname,
-    score_file_terms,
-    classify_by_terms,
-    classify_directory,
-    estimate_doc_type,
     is_readme_only,
     find_md_dirs,
-    _extract_glob_pattern,
-    aggregate_to_top_dirs,
-    build_doc_structure,
-    output_doc_structure,
-    output_yaml,
-    output_summary,
+    scan_directories,
+    output_scan,
 )
 
 
@@ -108,241 +97,7 @@ class TestExtractFrontMatter(_FsTestCase):
 
 
 # =========================================================================
-# 2. 分類テスト
-# =========================================================================
-
-class TestClassifyByFrontmatter(_FsTestCase):
-    """classify_by_frontmatter のテスト"""
-
-    def test_rules_by_frontmatter(self):
-        self._write_file('rules/coding.md', '---\ndoc_type: rule\n---\n# Rules')
-        result = classify_by_frontmatter(str(self.tmpdir), 'rules')
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], 'rules')
-
-    def test_specs_by_frontmatter(self):
-        self._write_file('specs/req.md', '---\ndoc_type: requirement\n---\n# Req')
-        result = classify_by_frontmatter(str(self.tmpdir), 'specs')
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], 'specs')
-
-    def test_no_front_matter(self):
-        self._write_file('docs/guide.md', '# Guide\nNo front matter.')
-        result = classify_by_frontmatter(str(self.tmpdir), 'docs')
-        self.assertIsNone(result)
-
-    def test_no_md_files(self):
-        (self.tmpdir / 'empty').mkdir()
-        result = classify_by_frontmatter(str(self.tmpdir), 'empty')
-        self.assertIsNone(result)
-
-    def test_mixed_front_matter(self):
-        """rule と spec が混在する場合、多い方が優先"""
-        self._write_file('docs/r1.md', '---\ndoc_type: rule\n---\n')
-        self._write_file('docs/r2.md', '---\ndoc_type: rule\n---\n')
-        self._write_file('docs/s1.md', '---\ndoc_type: requirement\n---\n')
-        result = classify_by_frontmatter(str(self.tmpdir), 'docs')
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], 'rules')
-
-    def test_high_confidence_all_same(self):
-        """全ファイルが同じ doc_type なら high confidence"""
-        self._write_file('docs/d1.md', '---\ndoc_type: design\n---\n')
-        self._write_file('docs/d2.md', '---\ndoc_type: design\n---\n')
-        result = classify_by_frontmatter(str(self.tmpdir), 'docs')
-        self.assertEqual(result[1], 'high')
-
-
-class TestClassifyByDirname(unittest.TestCase):
-    """classify_by_dirname のテスト"""
-
-    def test_rules_dirname(self):
-        result = classify_by_dirname('project/rules')
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], 'rules')
-
-    def test_specs_dirname(self):
-        result = classify_by_dirname('project/specs')
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], 'specs')
-
-    def test_requirements_dirname(self):
-        result = classify_by_dirname('specs/login/requirements')
-        self.assertEqual(result[0], 'specs')
-
-    def test_design_dirname(self):
-        result = classify_by_dirname('docs/design')
-        self.assertEqual(result[0], 'specs')
-
-    def test_guidelines_dirname(self):
-        result = classify_by_dirname('docs/guidelines')
-        self.assertEqual(result[0], 'rules')
-
-    def test_unknown_dirname(self):
-        result = classify_by_dirname('docs/misc')
-        self.assertIsNone(result)
-
-    def test_nested_match(self):
-        """パスの途中にある部分もマッチする"""
-        result = classify_by_dirname('some/rules/coding')
-        self.assertEqual(result[0], 'rules')
-
-    def test_case_insensitive(self):
-        """大文字ディレクトリ名も lower() で比較されマッチする"""
-        result = classify_by_dirname('docs/Rules')
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], 'rules')
-
-
-class TestScoreFileTerms(_FsTestCase):
-    """score_file_terms のテスト"""
-
-    def test_rule_terms(self):
-        f = self._write_file('doc.md',
-                             'You must follow the coding convention. '
-                             'This standard shall be followed. '
-                             'Naming guidelines must not be violated.')
-        rule, spec = score_file_terms(f)
-        self.assertGreater(rule, spec)
-
-    def test_spec_terms(self):
-        f = self._write_file('doc.md',
-                             'This feature requirement describes the API design. '
-                             'The architecture component must implement the specification.')
-        rule, spec = score_file_terms(f)
-        self.assertGreater(spec, rule)
-
-    def test_empty_file(self):
-        f = self._write_file('doc.md', '')
-        rule, spec = score_file_terms(f)
-        self.assertEqual(rule, 0)
-        self.assertEqual(spec, 0)
-
-    def test_nonexistent_file(self):
-        rule, spec = score_file_terms(self.tmpdir / 'nonexistent.md')
-        self.assertEqual(rule, 0)
-        self.assertEqual(spec, 0)
-
-
-class TestClassifyByTerms(_FsTestCase):
-    """classify_by_terms のテスト"""
-
-    def test_rules_by_terms(self):
-        self._write_file('docs/r.md',
-                         'All developers must follow the convention. '
-                         'This standard is mandatory. Naming rule applies. '
-                         'This policy shall be followed. Guidelines prohibit this.')
-        result = classify_by_terms(str(self.tmpdir), 'docs')
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], 'rules')
-
-    def test_specs_by_terms(self):
-        self._write_file('docs/s.md',
-                         'The feature requirement describes the API specification. '
-                         'Architecture component and design of the interface. '
-                         'Use case acceptance criteria and user story plan.')
-        result = classify_by_terms(str(self.tmpdir), 'docs')
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], 'specs')
-
-    def test_no_terms(self):
-        self._write_file('docs/generic.md', 'Hello world.')
-        result = classify_by_terms(str(self.tmpdir), 'docs')
-        self.assertIsNone(result)
-
-    def test_no_md_files(self):
-        (self.tmpdir / 'empty').mkdir()
-        result = classify_by_terms(str(self.tmpdir), 'empty')
-        self.assertIsNone(result)
-
-
-class TestClassifyDirectory(_FsTestCase):
-    """classify_directory のテスト（3段階フォールバック）"""
-
-    def test_frontmatter_priority(self):
-        """front matter が最優先"""
-        self._write_file('rules/coding.md', '---\ndoc_type: rule\n---\n# Coding')
-        result = classify_directory(str(self.tmpdir), 'rules')
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], 'rules')
-        self.assertIn('frontmatter', result[2])
-
-    def test_dirname_fallback(self):
-        """front matter なし → ディレクトリ名にフォールバック"""
-        self._write_file('specs/overview.md', '# Overview\nSome content.')
-        result = classify_directory(str(self.tmpdir), 'specs')
-        self.assertIsNotNone(result)
-        self.assertEqual(result[0], 'specs')
-        self.assertIn('dirname', result[2])
-
-    def test_terms_fallback(self):
-        """front matter なし + ディレクトリ名不明 → 用語ランキングにフォールバック"""
-        self._write_file('docs/d.md',
-                         'All developers must follow the convention. '
-                         'This standard is mandatory. Naming rule applies. '
-                         'Do not violate. Policy compliance required. '
-                         'This guideline is a best practice.')
-        result = classify_directory(str(self.tmpdir), 'docs')
-        self.assertIsNotNone(result)
-        self.assertIn('term_ranking', result[2])
-
-    def test_unclassifiable(self):
-        """全手法で判定不能 → None"""
-        self._write_file('misc/note.md', 'Just a short note.')
-        result = classify_directory(str(self.tmpdir), 'misc')
-        self.assertIsNone(result)
-
-
-# =========================================================================
-# 3. doc_type 推定テスト
-# =========================================================================
-
-class TestEstimateDocType(unittest.TestCase):
-    """estimate_doc_type のテスト"""
-
-    def test_requirements_dir(self):
-        self.assertEqual(estimate_doc_type('specs/login/requirements/', 'specs'), 'requirement')
-
-    def test_design_dir(self):
-        self.assertEqual(estimate_doc_type('specs/login/design/', 'specs'), 'design')
-
-    def test_plan_dir(self):
-        self.assertEqual(estimate_doc_type('specs/login/plan/', 'specs'), 'plan')
-
-    def test_rules_dir(self):
-        self.assertEqual(estimate_doc_type('rules/', 'rules'), 'rule')
-
-    def test_workflow_dir(self):
-        self.assertEqual(estimate_doc_type('rules/workflow/', 'rules'), 'workflow')
-
-    def test_guide_dir(self):
-        self.assertEqual(estimate_doc_type('docs/guidelines/', 'rules'), 'guide')
-
-    def test_api_dir(self):
-        self.assertEqual(estimate_doc_type('docs/api/', 'specs'), 'api')
-
-    def test_unknown_specs_default(self):
-        """不明なパスは category に応じたデフォルト"""
-        self.assertEqual(estimate_doc_type('docs/misc/', 'specs'), 'spec')
-
-    def test_unknown_rules_default(self):
-        self.assertEqual(estimate_doc_type('docs/misc/', 'rules'), 'rule')
-
-    def test_deepest_part_wins(self):
-        """reversed(parts) なので最深部が優先"""
-        self.assertEqual(estimate_doc_type('specs/requirements/design/', 'specs'), 'design')
-
-    def test_known_doc_type_names(self):
-        """DOC_TYPE_NAMES の主要エントリを確認"""
-        for dirname, expected in [('requirements', 'requirement'), ('req', 'requirement'),
-                                  ('designs', 'design'), ('plans', 'plan'),
-                                  ('standards', 'rule'), ('conventions', 'rule')]:
-            self.assertEqual(estimate_doc_type(f'docs/{dirname}/', 'specs'), expected,
-                             f'{dirname} → {expected}')
-
-
-# =========================================================================
-# 4. ファイルシステム探索テスト
+# 2. ファイルシステム探索テスト
 # =========================================================================
 
 class TestIsReadmeOnly(_FsTestCase):
@@ -428,7 +183,6 @@ class TestFindMdDirs(_FsTestCase):
             self.skipTest('symlink を作成できない環境')
         result = find_md_dirs(str(self.tmpdir))
         dirs = [d for d, _ in result]
-        # docs は1回だけ出現する（ループで重複しない）
         self.assertEqual(dirs.count('docs'), 1)
 
     def test_symlink_to_parent_no_infinite_walk(self):
@@ -443,329 +197,168 @@ class TestFindMdDirs(_FsTestCase):
         dirs = [d for d, _ in result]
         self.assertEqual(dirs.count('docs'), 1)
 
+    def test_shallow_scan_stops_at_md_dir(self):
+        """浅いスキャン: .md があるディレクトリの配下は探索しない"""
+        self._write_file('specs/overview.md', '# Overview')
+        self._write_file('specs/login/requirements/req.md', '# Req')
+        result = find_md_dirs(str(self.tmpdir))
+        dirs = [d for d, _ in result]
+        # specs/ で .md が見つかるので specs/login/requirements/ は報告されない
+        self.assertIn('specs', dirs)
+        self.assertNotIn('specs/login/requirements', dirs)
 
-# =========================================================================
-# 5. 集約・構造生成テスト
-# =========================================================================
+    def test_shallow_scan_sibling_dirs_independent(self):
+        """浅いスキャン: 兄弟ディレクトリは独立して探索"""
+        self._write_file('rules/coding/style.md', '# Style')
+        self._write_file('rules/naming/names.md', '# Names')
+        result = find_md_dirs(str(self.tmpdir))
+        dirs = [d for d, _ in result]
+        # rules/ に .md がないので、各サブディレクトリが個別に報告される
+        self.assertIn('rules/coding', dirs)
+        self.assertIn('rules/naming', dirs)
+        self.assertNotIn('rules', dirs)
 
-class TestExtractGlobPattern(unittest.TestCase):
-    """_extract_glob_pattern のテスト"""
-
-    def test_basic_glob(self):
-        """1箇所だけ異なる depth=3 パスから glob パターンを抽出"""
-        result = _extract_glob_pattern([
-            'specs/login/requirements',
-            'specs/auth/requirements',
-        ])
-        self.assertEqual(result, 'specs/*/requirements/')
-
-    def test_depth_2_returns_none(self):
-        """depth=2 のパスは glob 不要（None を返す）"""
-        result = _extract_glob_pattern([
-            'rules/coding',
-            'rules/naming',
-        ])
-        self.assertIsNone(result)
-
-    def test_different_depths_returns_none(self):
-        """深さが異なるパスは None"""
-        result = _extract_glob_pattern([
-            'specs/login/requirements',
-            'specs/design',
-        ])
-        self.assertIsNone(result)
-
-    def test_two_positions_vary_returns_none(self):
-        """2箇所以上異なると None"""
-        result = _extract_glob_pattern([
-            'specs/login/v1/requirements',
-            'specs/auth/v2/requirements',
-        ])
-        self.assertIsNone(result)
-
-    def test_single_entry_returns_none(self):
-        """1件だけでは glob 不要"""
-        result = _extract_glob_pattern(['specs/login/requirements'])
-        self.assertIsNone(result)
-
-    def test_three_entries(self):
-        """3件以上でも正しく glob 抽出"""
-        result = _extract_glob_pattern([
-            'specs/login/design',
-            'specs/auth/design',
-            'specs/payment/design',
-        ])
-        self.assertEqual(result, 'specs/*/design/')
-
-
-class TestAggregateToTopDirs(unittest.TestCase):
-    """aggregate_to_top_dirs のテスト"""
-
-    def test_single_category(self):
-        classified = [
-            ('rules/coding', 'rules', 'high', 'dirname'),
-            ('rules/naming', 'rules', 'medium', 'dirname'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        self.assertEqual(len(result['rules']), 1)
-        self.assertEqual(result['rules'][0]['dir'], 'rules/')
-
-    def test_mixed_categories_under_same_top(self):
-        """同じ top-level ディレクトリに rules と specs が混在"""
-        classified = [
-            ('docs/rules', 'rules', 'medium', 'dirname'),
-            ('docs/specs', 'specs', 'medium', 'dirname'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        self.assertTrue(len(result['rules']) >= 1)
-        self.assertTrue(len(result['specs']) >= 1)
-
-    def test_single_subdir_not_aggregated(self):
-        """サブディレクトリ1つだけの場合、そのパスを保持"""
-        classified = [
-            ('docs/requirements', 'specs', 'medium', 'dirname'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        self.assertEqual(result['specs'][0]['dir'], 'docs/requirements/')
-
-    def test_empty_input(self):
-        result = aggregate_to_top_dirs([])
-        self.assertEqual(result['rules'], [])
-        self.assertEqual(result['specs'], [])
-
-    def test_confidence_high_wins_over_medium(self):
-        """high と medium が混在する場合、集約後は high"""
-        classified = [
-            ('rules/coding', 'rules', 'medium', 'dirname'),
-            ('rules/naming', 'rules', 'high', 'term_ranking'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        self.assertEqual(result['rules'][0]['confidence'], 'high')
-
-    def test_confidence_not_lexicographic(self):
-        """confidence 比較が辞書順（m > h）ではなく意味順（high > medium）"""
-        classified = [
-            ('rules/a', 'rules', 'high', 'test'),
-            ('rules/b', 'rules', 'medium', 'test'),
-            ('rules/c', 'rules', 'low', 'test'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        self.assertEqual(result['rules'][0]['confidence'], 'high')
-
-    def test_different_doc_types_not_collapsed(self):
-        """同じ top_dir 配下で異なる doc_type は集約しない"""
-        classified = [
-            ('specs/requirements', 'specs', 'high', 'dirname'),
-            ('specs/design', 'specs', 'high', 'dirname'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        # 2つの個別パスが保持される（specs/ に潰されない）
-        self.assertEqual(len(result['specs']), 2)
-        dirs = sorted(e['dir'] for e in result['specs'])
-        self.assertEqual(dirs, ['specs/design/', 'specs/requirements/'])
-
-    def test_same_doc_type_still_aggregated(self):
-        """同一 doc_type のサブディレクトリは従来通り集約"""
-        classified = [
-            ('rules/coding', 'rules', 'high', 'dirname'),
-            ('rules/naming', 'rules', 'medium', 'dirname'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        self.assertEqual(len(result['rules']), 1)
-        self.assertEqual(result['rules'][0]['dir'], 'rules/')
-
-    def test_doc_type_preserved_in_output(self):
-        """集約結果に doc_type が含まれる"""
-        classified = [
-            ('specs/requirements', 'specs', 'high', 'dirname'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        self.assertEqual(result['specs'][0].get('doc_type'), 'requirement')
-
-    def test_deep_paths_generate_glob_pattern(self):
-        """depth≥3 で 1箇所だけ異なるパスは glob パターンを生成"""
-        classified = [
-            ('specs/login/requirements', 'specs', 'high', 'dirname'),
-            ('specs/auth/requirements', 'specs', 'high', 'dirname'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        self.assertEqual(len(result['specs']), 1)
-        self.assertEqual(result['specs'][0]['dir'], 'specs/*/requirements/')
-        self.assertEqual(result['specs'][0]['doc_type'], 'requirement')
-
-    def test_deep_paths_different_doc_types_separate_globs(self):
-        """depth≥3 で異なる doc_type はそれぞれ別の glob パターン"""
-        classified = [
-            ('specs/login/requirements', 'specs', 'high', 'dirname'),
-            ('specs/auth/requirements', 'specs', 'high', 'dirname'),
-            ('specs/login/design', 'specs', 'high', 'dirname'),
-            ('specs/auth/design', 'specs', 'high', 'dirname'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        self.assertEqual(len(result['specs']), 2)
-        dirs = sorted(e['dir'] for e in result['specs'])
-        self.assertEqual(dirs, ['specs/*/design/', 'specs/*/requirements/'])
-
-    def test_deep_paths_no_glob_when_multiple_positions_vary(self):
-        """2箇所以上異なる深いパスは個別保持"""
-        classified = [
-            ('specs/login/v1/requirements', 'specs', 'high', 'dirname'),
-            ('specs/auth/v2/requirements', 'specs', 'high', 'dirname'),
-        ]
-        result = aggregate_to_top_dirs(classified)
-        # glob 不可 → 個別パス保持
-        self.assertEqual(len(result['specs']), 2)
-
-
-class TestBuildDocStructure(unittest.TestCase):
-    """build_doc_structure のテスト"""
-
-    def test_basic_structure(self):
-        classification = {
-            'specs': [
-                {'dir': 'specs/requirements/', 'confidence': 'high', 'reason': 'test'},
-                {'dir': 'specs/design/', 'confidence': 'high', 'reason': 'test'},
-            ],
-            'rules': [
-                {'dir': 'rules/', 'confidence': 'high', 'reason': 'test'},
-            ],
-        }
-        result = build_doc_structure(classification)
-
-        self.assertIn('specs', result)
-        self.assertIn('rules', result)
-        self.assertIn('requirement', result['specs'])
-        self.assertIn('design', result['specs'])
-        self.assertEqual(result['specs']['requirement']['paths'], ['specs/requirements/'])
-        self.assertEqual(result['rules']['rule']['paths'], ['rules/'])
-
-    def test_multiple_paths_same_doc_type(self):
-        """同じ doc_type に複数パスが集約される"""
-        classification = {
-            'specs': [
-                {'dir': 'specs/requirements/', 'confidence': 'high', 'reason': 'test'},
-                {'dir': 'modules/requirements/', 'confidence': 'high', 'reason': 'test'},
-            ],
-        }
-        result = build_doc_structure(classification)
-        self.assertEqual(len(result['specs']['requirement']['paths']), 2)
-
-    def test_empty_classification(self):
-        result = build_doc_structure({'specs': [], 'rules': []})
-        self.assertEqual(result, {})
-
-    def test_doc_type_from_entry(self):
-        """entry に doc_type があればそれを使う（estimate_doc_type ではなく）"""
-        classification = {
-            'specs': [
-                {'dir': 'specs/', 'confidence': 'high', 'reason': 'test',
-                 'doc_type': 'requirement'},
-            ],
-        }
-        result = build_doc_structure(classification)
-        # specs/ → estimate_doc_type なら 'spec' になるが、entry の doc_type を優先
-        self.assertIn('requirement', result['specs'])
-        self.assertNotIn('spec', result['specs'])
-
-    def test_doc_type_fallback_to_estimate(self):
-        """entry に doc_type がなければ estimate_doc_type にフォールバック"""
-        classification = {
-            'specs': [
-                {'dir': 'specs/requirements/', 'confidence': 'high', 'reason': 'test'},
-            ],
-        }
-        result = build_doc_structure(classification)
-        self.assertIn('requirement', result['specs'])
+    def test_shallow_scan_parent_with_md_blocks_children(self):
+        """浅いスキャン: 親に .md があれば子は報告されない"""
+        self._write_file('docs/guide.md', '# Guide')
+        self._write_file('docs/sub/detail.md', '# Detail')
+        result = find_md_dirs(str(self.tmpdir))
+        dirs = [d for d, _ in result]
+        self.assertIn('docs', dirs)
+        self.assertNotIn('docs/sub', dirs)
 
 
 # =========================================================================
-# 6. 出力フォーマットテスト
+# 3. スキャン・メタデータ収集テスト
 # =========================================================================
 
-class TestOutputDocStructure(unittest.TestCase):
-    """output_doc_structure のテスト"""
+class TestScanDirectories(_FsTestCase):
+    """scan_directories のテスト"""
 
-    def _capture(self, classification):
+    def test_basic_scan(self):
+        """標準的なスキャン結果の構造"""
+        self._write_file('docs/guide.md', '# Guide')
+        result = scan_directories(str(self.tmpdir))
+        self.assertEqual(len(result), 1)
+        entry = result[0]
+        self.assertEqual(entry['dir'], 'docs')
+        self.assertEqual(entry['md_count'], 1)
+        self.assertIsInstance(entry['readme_only'], bool)
+        self.assertIsInstance(entry['path_components'], list)
+        self.assertIn('frontmatter_doc_types', entry)
+
+    def test_readme_only_flagged(self):
+        """readme_only フラグが正しく設定される"""
+        self._write_file('docs/README.md', '# Readme')
+        self._write_file('specs/req.md', '# Req')
+        result = scan_directories(str(self.tmpdir))
+        docs = [r for r in result if r['dir'] == 'docs'][0]
+        specs = [r for r in result if r['dir'] == 'specs'][0]
+        self.assertTrue(docs['readme_only'])
+        self.assertFalse(specs['readme_only'])
+
+    def test_frontmatter_collected(self):
+        """frontmatter の doc_type 値が収集される"""
+        self._write_file('docs/r1.md', '---\ndoc_type: rule\n---\n# Rule 1')
+        self._write_file('docs/r2.md', '---\ndoc_type: rule\n---\n# Rule 2')
+        self._write_file('docs/plain.md', '# No frontmatter')
+        result = scan_directories(str(self.tmpdir))
+        entry = result[0]
+        self.assertEqual(entry['frontmatter_doc_types'], ['rule', 'rule'])
+
+    def test_no_frontmatter_is_none(self):
+        """frontmatter がないディレクトリは None"""
+        self._write_file('docs/guide.md', '# Guide')
+        result = scan_directories(str(self.tmpdir))
+        self.assertIsNone(result[0]['frontmatter_doc_types'])
+
+    def test_path_components(self):
+        """path_components が正しく分割される"""
+        self._write_file('rules/coding/style.md', '# Style')
+        result = scan_directories(str(self.tmpdir))
+        entry = [r for r in result if r['dir'] == 'rules/coding'][0]
+        self.assertEqual(entry['path_components'], ['rules', 'coding'])
+
+    def test_skip_prefixes(self):
+        """--skip で指定されたディレクトリが除外される"""
+        self._write_file('docs/guide.md', '# Guide')
+        self._write_file('extra/notes/memo.md', '# Memo')
+        result_all = scan_directories(str(self.tmpdir))
+        result_skip = scan_directories(str(self.tmpdir), skip_prefixes=['extra'])
+        dirs_all = [r['dir'] for r in result_all]
+        dirs_skip = [r['dir'] for r in result_skip]
+        self.assertIn('extra/notes', dirs_all)
+        self.assertNotIn('extra/notes', dirs_skip)
+        self.assertIn('docs', dirs_skip)
+
+    def test_empty_project(self):
+        """.md なしの場合は空リスト"""
+        result = scan_directories(str(self.tmpdir))
+        self.assertEqual(result, [])
+
+    def test_mixed_frontmatter(self):
+        """同一ディレクトリ内で異なる doc_type が混在"""
+        self._write_file('docs/r.md', '---\ndoc_type: rule\n---\n')
+        self._write_file('docs/d.md', '---\ndoc_type: design\n---\n')
+        result = scan_directories(str(self.tmpdir))
+        doc_types = result[0]['frontmatter_doc_types']
+        self.assertEqual(len(doc_types), 2)
+        self.assertIn('rule', doc_types)
+        self.assertIn('design', doc_types)
+
+
+class TestOutputScan(_FsTestCase):
+    """output_scan のテスト"""
+
+    def _capture(self, project_root, directories):
         buf = io.StringIO()
         with redirect_stdout(buf):
-            output_doc_structure(classification)
+            output_scan(project_root, directories)
         return buf.getvalue()
 
-    def test_basic_output(self):
-        classification = {
-            'specs': [
-                {'dir': 'specs/requirements/', 'confidence': 'high', 'reason': 'test'},
-            ],
-            'rules': [
-                {'dir': 'rules/', 'confidence': 'high', 'reason': 'test'},
-            ],
-        }
-        output = self._capture(classification)
-        self.assertIn('version: "1.0"', output)
-        self.assertIn('specs:', output)
-        self.assertIn('requirement:', output)
-        self.assertIn('paths: [specs/requirements/]', output)
-        self.assertIn('rules:', output)
+    def test_valid_json(self):
+        """出力が有効な JSON"""
+        output = self._capture('/tmp/project', [
+            {'dir': 'docs', 'md_count': 1, 'readme_only': False,
+             'path_components': ['docs'], 'frontmatter_doc_types': None},
+        ])
+        parsed = json.loads(output)
+        self.assertIn('project_root', parsed)
+        self.assertIn('directories', parsed)
 
-    def test_empty_output(self):
-        output = self._capture({'specs': [], 'rules': []})
-        self.assertIn('version: "1.0"', output)
-        self.assertNotIn('specs:', output)
+    def test_output_keys(self):
+        """必須キーの存在"""
+        output = self._capture('/tmp/project', [
+            {'dir': 'docs', 'md_count': 2, 'readme_only': True,
+             'path_components': ['docs'], 'frontmatter_doc_types': ['rule']},
+        ])
+        parsed = json.loads(output)
+        entry = parsed['directories'][0]
+        self.assertEqual(entry['dir'], 'docs')
+        self.assertEqual(entry['md_count'], 2)
+        self.assertTrue(entry['readme_only'])
+        self.assertEqual(entry['path_components'], ['docs'])
+        self.assertEqual(entry['frontmatter_doc_types'], ['rule'])
 
+    def test_empty_directories(self):
+        """空の場合の出力"""
+        output = self._capture('/tmp/project', [])
+        parsed = json.loads(output)
+        self.assertEqual(parsed['directories'], [])
 
-class TestOutputSummary(unittest.TestCase):
-    """output_summary のテスト"""
-
-    def _capture(self, classification):
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            output_summary(classification)
-        return buf.getvalue()
-
-    def test_with_entries(self):
-        classification = {
-            'rules': [{'dir': 'rules/', 'confidence': 'high', 'reason': 'dirname'}],
-            'specs': [],
-            'skip': [],
-        }
-        output = self._capture(classification)
-        self.assertIn('rules:', output)
-        self.assertIn('type=rule', output)
-
-    def test_empty(self):
-        output = self._capture({'rules': [], 'specs': [], 'skip': []})
-        self.assertIn('No document directories detected', output)
-
-    def test_skip_entries(self):
-        classification = {
-            'rules': [], 'specs': [],
-            'skip': [{'dir': 'docs/', 'reason': 'README/CHANGELOG only'}],
-        }
-        output = self._capture(classification)
-        self.assertIn('skipped:', output)
-
-
-class TestOutputYaml(unittest.TestCase):
-    """output_yaml のテスト"""
-
-    def test_basic(self):
-        classification = {
-            'rules': [{'dir': 'rules/', 'confidence': 'high', 'reason': 'dirname'}],
-            'specs': [{'dir': 'specs/requirements/', 'confidence': 'medium', 'reason': 'terms'}],
-            'skip': [],
-            'mixed': [],
-        }
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            output_yaml(classification)
-        output = buf.getvalue()
-        self.assertIn('classification:', output)
-        self.assertIn('doc_type: rule', output)
-        self.assertIn('doc_type: requirement', output)
+    def test_ensure_ascii_false(self):
+        """日本語パスが正しく出力される"""
+        output = self._capture('/tmp/project', [
+            {'dir': 'ドキュメント', 'md_count': 1, 'readme_only': False,
+             'path_components': ['ドキュメント'], 'frontmatter_doc_types': None},
+        ])
+        self.assertIn('ドキュメント', output)
+        parsed = json.loads(output)
+        self.assertEqual(parsed['directories'][0]['dir'], 'ドキュメント')
 
 
 # =========================================================================
-# 7. 定数の健全性テスト
+# 4. 定数の健全性テスト
 # =========================================================================
 
 class TestConstants(unittest.TestCase):
@@ -775,11 +368,6 @@ class TestConstants(unittest.TestCase):
         """SKIP_DIRS にパス区切りが含まれていない"""
         for d in SKIP_DIRS:
             self.assertFalse('/' in d, f'SKIP_DIRS にパス区切り: {d}')
-
-    def test_doc_type_names_lowercase_keys(self):
-        for key in DOC_TYPE_NAMES:
-            self.assertEqual(key, key.lower(),
-                             f'DOC_TYPE_NAMES のキーに大文字: {key}')
 
     def test_skip_indicators_are_filenames(self):
         for ind in SKIP_INDICATORS:
