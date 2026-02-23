@@ -8,8 +8,8 @@ A Claude Code plugin marketplace for AI-powered code & document review, and proj
 
 | Plugin | Version | Description |
 |--------|---------|-------------|
-| **kaizen** | 0.0.2 | AI-powered code & document review with staged presentation and auto-fix |
-| **doc-structure** | 0.0.1 | Define and query project document structure (`.doc_structure.yaml`) |
+| **kaizen** | 0.0.3 | AI-powered code & document review with staged presentation and auto-fix |
+| **doc-structure** | 0.0.2 | Define and query project document structure (`.doc_structure.yaml`) |
 
 ## Installation
 

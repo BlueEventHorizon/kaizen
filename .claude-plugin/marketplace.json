@@ -8,7 +8,7 @@
     {
       "name": "kaizen",
       "description": "AI-powered code & document review with staged presentation and auto-fix",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "author": {
         "name": "moons"
       },
@@ -18,7 +18,7 @@
     {
       "name": "doc-structure",
       "description": "Define and query project document structure (.doc_structure.yaml)",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "author": {
         "name": "moons"
       },

@@ -1,7 +1,7 @@
 {
   "name": "kaizen",
   "description": "Code & document review with staged presentation and auto-fix. Supports Codex / Claude engines, optional DocAdvisor skills, and interactive resolution.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "author": {
     "name": "moons"
   },
