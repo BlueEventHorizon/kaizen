@@ -10,6 +10,7 @@ A Claude Code plugin marketplace for AI-powered code & document review, and proj
 |--------|---------|-------------|
 | **kaizen** | 0.0.3 | AI-powered code & document review with staged presentation and auto-fix |
 | **doc-structure** | 0.0.3 | Define and query project document structure (`.doc_structure.yaml`) |
+| **shell-utils** | 0.0.1 | Shell utility collection: Python environment detection, path formatting |
 
 ## Installation
 
@@ -21,6 +22,7 @@ Inside a Claude Code session:
 /plugin marketplace add BlueEventHorizon/bw-cc-plugins
 /plugin install kaizen@bw-cc-plugins
 /plugin install doc-structure@bw-cc-plugins
+/plugin install shell-utils@bw-cc-plugins
 ```
 
 If you already installed, from your terminal:
@@ -28,6 +30,7 @@ If you already installed, from your terminal:
 ```bash
 claude plugin enable kaizen@bw-cc-plugins
 claude plugin enable doc-structure@bw-cc-plugins
+claude plugin enable shell-utils@bw-cc-plugins
 ```
 
 <img src="./images/install_kaizen.png" width="900">
@@ -40,6 +43,7 @@ claude plugin enable doc-structure@bw-cc-plugins
 git clone https://github.com/BlueEventHorizon/bw-cc-plugins.git
 claude --plugin-dir ./bw-cc-plugins/plugins/kaizen
 claude --plugin-dir ./bw-cc-plugins/plugins/doc-structure
+claude --plugin-dir ./bw-cc-plugins/plugins/shell-utils
 ```
 
 > **Note**: `--plugin-dir` is session-only. You must specify it every time you start Claude Code. To unload, simply start without the flag.
@@ -51,6 +55,7 @@ From your terminal:
 ```bash
 claude plugin update kaizen@bw-cc-plugins --scope local
 claude plugin update doc-structure@bw-cc-plugins --scope local
+claude plugin update shell-utils@bw-cc-plugins --scope local
 ```
 
 ## kaizen
@@ -180,9 +185,59 @@ rules:
     paths: [rules/]
 ```
 
+## shell-utils
+
+Shell utility collection for Claude Code projects. Python environment detection and path formatting.
+
+### Usage
+
+```bash
+# Detect Python environment
+/shell-utils:detect-python
+
+# Format paths for display
+/shell-utils:format-path /Users/name/long/path/to/project
+
+# Format with middle truncation
+/shell-utils:format-path --truncate 30 /Users/name/long/path/to/project
+
+# Format relative to git root
+/shell-utils:format-path --git-root /repo/deep/nested/file.py
+```
+
+### Skills
+
+| Skill | User-invocable | Description |
+|-------|---------------|-------------|
+| `detect-python` | Yes | Detect usable Python3 command, bypassing Claude Code shell-snapshots wrapper. Detects pyenv/venv/conda |
+| `format-path` | Yes | Format file paths for readable display: `$HOME` → `~`, CWD-relative, middle truncation, git-root relative |
+
+### Path Formatting Features
+
+| Feature | Example |
+|---------|---------|
+| `$HOME` → `~` | `/Users/name/dev/proj` → `~/dev/proj` |
+| CWD-relative (if shorter) | `../sibling/file` |
+| Middle truncation | `~/data/dev/…/apps/MyProject` |
+| Git root-relative | `<MyProject>/src/main.py` |
+
+### Script Usage from Other Plugins
+
+```bash
+# Detect Python (outputs eval-able variables)
+eval "$(bash ${CLAUDE_PLUGIN_ROOT}/scripts/detect_python.sh)"
+
+# Use detected Python to run scripts
+$PYTHON_CMD ${CLAUDE_PLUGIN_ROOT}/scripts/format_path.py /some/path
+
+# Output shell function for embedding
+$PYTHON_CMD ${CLAUDE_PLUGIN_ROOT}/scripts/format_path.py --shell-func
+```
+
 ## Requirements
 
 - [Claude Code](https://claude.ai/code) CLI
+- Python 3 (for shell-utils)
 - [Codex CLI](https://github.com/openai/codex) (optional, for Codex engine; falls back to Claude if unavailable)
 
 ## License

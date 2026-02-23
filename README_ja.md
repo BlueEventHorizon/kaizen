@@ -10,6 +10,7 @@ AI によるコード・文書レビューと、プロジェクト文書構造�
 |-----------|-----------|------|
 | **kaizen** | 0.0.3 | AI によるコード・文書レビュー。段階的な対話提示と自動修正に対応 |
 | **doc-structure** | 0.0.3 | `.doc_structure.yaml` によるプロジェクト文書構成の定義・クエリ |
+| **shell-utils** | 0.0.1 | シェルユーティリティ集: Python 環境検出、パス整形 |
 
 ## インストール
 
@@ -21,6 +22,7 @@ Claude Code セッション内で:
 /plugin marketplace add BlueEventHorizon/bw-cc-plugins
 /plugin install kaizen@bw-cc-plugins
 /plugin install doc-structure@bw-cc-plugins
+/plugin install shell-utils@bw-cc-plugins
 ```
 
 すでにinstall済みの場合は、ターミナルから:
@@ -28,6 +30,7 @@ Claude Code セッション内で:
 ```bash
 claude plugin enable kaizen@bw-cc-plugins
 claude plugin enable doc-structure@bw-cc-plugins
+claude plugin enable shell-utils@bw-cc-plugins
 ```
 
 <img src="./images/install_kaizen.png" width="900">
@@ -40,6 +43,7 @@ claude plugin enable doc-structure@bw-cc-plugins
 git clone https://github.com/BlueEventHorizon/bw-cc-plugins.git
 claude --plugin-dir ./bw-cc-plugins/plugins/kaizen
 claude --plugin-dir ./bw-cc-plugins/plugins/doc-structure
+claude --plugin-dir ./bw-cc-plugins/plugins/shell-utils
 ```
 
 > **注意**: `--plugin-dir` はセッション限定です。Claude Code を起動するたびに指定が必要です。解除するには、フラグなしで起動するだけです。
@@ -51,6 +55,7 @@ claude --plugin-dir ./bw-cc-plugins/plugins/doc-structure
 ```bash
 claude plugin update kaizen@bw-cc-plugins --scope local
 claude plugin update doc-structure@bw-cc-plugins --scope local
+claude plugin update shell-utils@bw-cc-plugins --scope local
 ```
 
 ## kaizen
@@ -180,9 +185,59 @@ rules:
     paths: [rules/]
 ```
 
+## shell-utils
+
+Claude Code プロジェクト向けシェルユーティリティ集。Python 環境検出とパス整形。
+
+### 使い方
+
+```bash
+# Python 環境を検出
+/shell-utils:detect-python
+
+# パスを見やすく整形
+/shell-utils:format-path /Users/name/long/path/to/project
+
+# 長いパスを中間省略
+/shell-utils:format-path --truncate 30 /Users/name/long/path/to/project
+
+# Git ルート起点で表示
+/shell-utils:format-path --git-root /repo/deep/nested/file.py
+```
+
+### スキル構成
+
+| スキル | ユーザー呼び出し | 説明 |
+|--------|-----------------|------|
+| `detect-python` | 可能 | Python3 コマンドを検出。Claude Code shell-snapshots ラッパーを回避。pyenv/venv/conda 対応 |
+| `format-path` | 可能 | パスを見やすく整形: `$HOME` → `~`、CWD 相対パス、中間省略、Git ルート起点 |
+
+### パス整形機能
+
+| 機能 | 例 |
+|------|-----|
+| `$HOME` → `~` | `/Users/name/dev/proj` → `~/dev/proj` |
+| CWD 相対パス（短い場合） | `../sibling/file` |
+| 中間省略 | `~/data/dev/…/apps/MyProject` |
+| Git ルート起点 | `<MyProject>/src/main.py` |
+
+### 他プラグインからのスクリプト利用
+
+```bash
+# Python 検出（eval 可能な変数を出力）
+eval "$(bash ${CLAUDE_PLUGIN_ROOT}/scripts/detect_python.sh)"
+
+# 検出した Python でスクリプト実行
+$PYTHON_CMD ${CLAUDE_PLUGIN_ROOT}/scripts/format_path.py /some/path
+
+# シェル関数定義を出力（埋め込み用）
+$PYTHON_CMD ${CLAUDE_PLUGIN_ROOT}/scripts/format_path.py --shell-func
+```
+
 ## 動作要件
 
 - [Claude Code](https://claude.ai/code) CLI
+- Python 3（shell-utils 用）
 - [Codex CLI](https://github.com/openai/codex)（任意。Codex エンジン使用時に必要。未インストールの場合は Claude にフォールバック）
 
 ## ライセンス
