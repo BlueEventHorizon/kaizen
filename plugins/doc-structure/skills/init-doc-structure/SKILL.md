@@ -47,9 +47,9 @@ python3 <scripts_dir>/classify_dirs.py
 **進捗表示 [MANDATORY]**: 各ディレクトリの判定ごとに結果をユーザーに表示すること。
 ```
 分類中...
-  rules/ → rules / rule
-  specs/core/requirements/ → specs / requirement
-  specs/core/design/ → specs / design
+  rules/                   → [category]: rules  [doc_type]: rule
+  specs/core/requirements/ → [category]: specs  [doc_type]: requirement
+  specs/core/design/       → [category]: specs  [doc_type]: design
   ...
 ```
 
@@ -62,17 +62,17 @@ python3 <scripts_dir>/classify_dirs.py
 提示例:
 ```
 分類結果:
-  1. rules / rule       → rules/
-  2. specs / requirement → specs/*/requirements/
+  1. [category]: rules  [doc_type]: rule        → rules/
+  2. [category]: specs  [doc_type]: requirement  → specs/*/requirements/
      - specs/login/requirements/
      - specs/auth/requirements/
      - specs/archived/requirements/ *exclude*
      - specs/_template/requirements/
-  3. specs / design      → specs/*/design/
+  3. [category]: specs  [doc_type]: design       → specs/*/design/
      - specs/login/design/
      - specs/auth/design/
-  4. specs / plan        → specs/*/plan/
-  5. specs / reference   → specs/shared/, specs/issues/
+  4. [category]: specs  [doc_type]: plan         → specs/*/plan/
+  5. [category]: specs  [doc_type]: reference    → specs/shared/, specs/issues/
 
 修正・除外したいものはありますか？（例: "archived除外", "5をspecに変更"）
 ```
@@ -121,13 +121,14 @@ rules:
     exclude: ["<dir_name>", ...]  # optional
 ```
 
-### 推奨 doc_type 名
+### doc_type 定義（固定。全プロジェクト・全プラグインで共通）
 
-| Category | Name | Description |
-|----------|------|-------------|
-| specs | requirement | 要件定義書 |
-| specs | design | 設計書 |
-| specs | plan | 実装計画書 |
-| specs | api | API 仕様書 |
-| specs | reference | 参考資料 |
-| rules | rule | 開発ルール・規約・標準・ワークフロー・ガイド |
+| category | doc_type | 意味 | 含まれる文書の例 |
+|----------|----------|------|-----------------|
+| rules | rule | 開発プロセスのルール・規約・手順 | コーディング規約、命名規則、Git ワークフロー、レビュー手順、CI/CD ルール |
+| specs | requirement | 「何を実現するか」のゴール定義 | ユーザーストーリー、機能要件、非機能要件、ビジネスルール、受入条件 |
+| specs | design | 「どう構成するか」の技術的構造 | アーキテクチャ設計、DB スキーマ設計、画面設計、シーケンス図、状態遷移図 |
+| specs | plan | 「どの順で作るか」の作業計画 | タスク分割、実装順序、マイルストーン、スプリント計画、移行計画 |
+| specs | api | 外部インターフェースの契約 | REST エンドポイント定義、リクエスト/レスポンス仕様、OpenAPI/Swagger、GraphQL スキーマ |
+| specs | reference | 判断の根拠となる補助文書 | 技術調査メモ、比較検討資料、外部仕様の要約、議事録、用語集 |
+| specs | spec | 上記に該当しない仕様文書（デフォルト） | 分類不明な仕様文書の一時的な受け皿 |

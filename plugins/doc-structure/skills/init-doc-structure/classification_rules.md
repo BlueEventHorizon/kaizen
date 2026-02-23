@@ -16,20 +16,19 @@
 category 内での**文書の種類**。ワークフローで必要な文書をフィルタリングするために使う。
 例: 要件定義フロー → requirement だけ読む、設計フロー → design だけ読む。
 
-推奨名:
+定義（固定。全プロジェクト・全プラグインで共通）:
 
-| category | doc_type | 意味 |
-|----------|----------|------|
-| rules | rule | 開発ルール・規約・標準・ワークフロー・ガイド |
-| specs | requirement | 要件定義書 |
-| specs | design | 設計書 |
-| specs | plan | 実装計画書 |
-| specs | api | API 仕様書 |
-| specs | reference | 参考資料 |
-| specs | spec | 上記に当てはまらない仕様文書 |
+| category | doc_type | 意味 | 含まれる文書の例 |
+|----------|----------|------|-----------------|
+| rules | rule | 開発プロセスのルール・規約・手順 | コーディング規約、命名規則、Git ワークフロー、レビュー手順、CI/CD ルール |
+| specs | requirement | 「何を実現するか」のゴール定義 | ユーザーストーリー、機能要件、非機能要件、ビジネスルール、受入条件 |
+| specs | design | 「どう構成するか」の技術的構造 | アーキテクチャ設計、DB スキーマ設計、画面設計、シーケンス図、状態遷移図 |
+| specs | plan | 「どの順で作るか」の作業計画 | タスク分割、実装順序、マイルストーン、スプリント計画、移行計画 |
+| specs | api | 外部インターフェースの契約 | REST エンドポイント定義、リクエスト/レスポンス仕様、OpenAPI/Swagger、GraphQL スキーマ |
+| specs | reference | 判断の根拠となる補助文書 | 技術調査メモ、比較検討資料、外部仕様の要約、議事録、用語集 |
+| specs | spec | 上記に該当しない仕様文書（デフォルト） | 分類不明な仕様文書の一時的な受け皿 |
 
 rules の doc_type は **rule 一択**。rules 内の文書は内容に関わらず全て読むべきものであり、細分類は不要。
-doc_type 名はプロジェクトに合わせてカスタマイズ可能。上記は推奨名。
 
 ## 原則
 
@@ -46,7 +45,7 @@ doc_type 名はプロジェクトに合わせてカスタマイズ可能。上�
 
 1. 各コンポーネントが rules / specs のどちらかに**意味的に近い**か判断 → マッチしたら category 確定
 2. category が **rules** → doc_type は `rule`（確定。以降見ない）
-3. category が **specs** → 続きのコンポーネントを走査し、doc_type の推奨名に意味的に近いものを判定 → マッチしたら確定（以降見ない）。該当なしなら `spec`（デフォルト）
+3. category が **specs** → 続きのコンポーネントを走査し、doc_type の定義名に意味的に近いものを判定 → マッチしたら確定（以降見ない）。該当なしなら `spec`（デフォルト）
 
 **例:**
 ```
@@ -78,11 +77,11 @@ path_components から判定できない場合、ディレクトリ内の .md �
 
 ```
 スキャン結果:
-  rules/coding/    → rules/rule
-  rules/naming/    → rules/rule
-  rules/workflow/  → rules/rule
+  rules/coding/    → [category]: rules  [doc_type]: rule
+  rules/naming/    → [category]: rules  [doc_type]: rule
+  rules/workflow/  → [category]: rules  [doc_type]: rule
 
-全て rules/rule → 上位ディレクトリで代表:
+全て同じ分類 → 上位ディレクトリで代表:
   rules:
     rule:
       paths: [rules/]
@@ -94,5 +93,5 @@ path_components から判定できない場合、ディレクトリ内の .md �
 
 | パス例 | 誤った判定 | 正しい判定 | 理由 |
 |-------|-----------|-----------|------|
-| `specs/guidelines/` | rules/rule | **要確認** | specs 配下なので specs が優先。ユーザーに確認 |
+| `specs/guidelines/` | [category]: rules [doc_type]: rule | **要確認** | specs 配下なので specs が優先。ユーザーに確認 |
 | `docs/`（混在） | 一律分類 | **要確認** | rules と specs が混在する可能性が高い |
