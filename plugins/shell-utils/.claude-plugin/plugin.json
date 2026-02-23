@@ -1,0 +1,9 @@
+{
+  "name": "shell-utils",
+  "description": "Shell utility collection: Python environment detection, path formatting, and more",
+  "version": "0.0.1",
+  "author": {
+    "name": "moons"
+  },
+  "license": "MIT"
+}

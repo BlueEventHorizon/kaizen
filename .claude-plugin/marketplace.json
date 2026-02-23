@@ -24,6 +24,16 @@
       },
       "source": "./plugins/doc-structure",
       "homepage": "https://github.com/BlueEventHorizon/bw-cc-plugins"
+    },
+    {
+      "name": "shell-utils",
+      "description": "Shell utility collection: Python environment detection, path formatting, and more",
+      "version": "0.0.1",
+      "author": {
+        "name": "moons"
+      },
+      "source": "./plugins/shell-utils",
+      "homepage": "https://github.com/BlueEventHorizon/bw-cc-plugins"
     }
   ]
 }
