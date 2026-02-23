@@ -2,9 +2,9 @@
 """
 レビュー対象の検出と種別判定スクリプト
 
-DocAdvisor の config.yaml を利用してプロジェクト構造を把握し、
-レビュー対象ファイル・種別・参考文書を特定する。
-DocAdvisor がない場合は拡張子で判定し、判定不能な場合はユーザーへの問い合わせ情報を出力。
+.doc_structure.yaml を参照してプロジェクト構造を把握し、
+レビュー対象ファイル・種別を特定する。
+.doc_structure.yaml がない場合はエラーを返す。
 
 標準ライブラリのみ使用（pyyaml 不要）。
 
@@ -16,15 +16,15 @@ Usage:
 
 Output (JSON):
   {
-    "status": "resolved" | "needs_input",
-    "has_doc_advisor": true | false,
+    "status": "resolved" | "needs_input" | "error",
+    "has_doc_structure": true | false,
     "type": "requirement" | "design" | "code" | "plan" | "generic" | null,
     "target_files": ["path1", ...],
-    "reference_docs": ["path1", ...],
     "features": ["feature1", ...],
     "questions": [
       {"key": "type|feature|target", "message": "...", "options": [...]}
-    ]
+    ],
+    "error": "エラーメッセージ（status=error 時のみ）"
   }
 """
 
@@ -38,28 +38,239 @@ from pathlib import Path
 CODE_EXTENSIONS = {'.swift', '.kt', '.java', '.ts', '.tsx', '.js', '.jsx',
                    '.py', '.go', '.rs', '.c', '.cpp', '.h', '.m', '.mm'}
 
-# generic 種別の判定パターン（基盤文書）
-GENERIC_PATH_PATTERNS = [
+# generic 種別の基盤文書パターン（rules パスは doc_structure から動的取得）
+GENERIC_BASE_PATTERNS = [
     '.claude/skills/',
     '.claude/commands/',
-    'rules/',
 ]
 GENERIC_ROOT_FILES = {'CLAUDE.md', 'README.md'}
 
+# specs doc_type → review type マッピング
+SPECS_REVIEW_TYPE_MAP = {
+    'requirement': 'requirement',
+    'design': 'design',
+    'plan': 'plan',
+}
+
+
+# ---------------------------------------------------------------------------
+# .doc_structure.yaml パーサー（標準ライブラリのみ、専用スキーマ）
+# ---------------------------------------------------------------------------
+
+def _split_kv(s):
+    """'key: value' を分割。値がない場合は空文字列"""
+    key, _, val = s.partition(':')
+    return key.strip(), val.strip()
+
+
+def _parse_flow_array(s):
+    """フロー配列 '[a, b, c]' をパース"""
+    inner = s.strip()[1:-1]  # [ ] を除去
+    if not inner.strip():
+        return []
+    return [item.strip().strip('"\'') for item in inner.split(',') if item.strip()]
+
+
+def _parse_doc_structure_yaml(filepath):
+    """.doc_structure.yaml 専用パーサー（インデントベース状態マシン）"""
+    result = {}
+    current_category = None  # 'specs' or 'rules'
+    current_doc_type = None
+    current_field = None
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            stripped = line.rstrip()
+            if not stripped or stripped.lstrip().startswith('#'):
+                continue
+
+            indent = len(line) - len(line.lstrip())
+            content = stripped.strip()
+
+            # indent=0: トップレベルキー (version, specs, rules)
+            if indent == 0 and ':' in content:
+                key, val = _split_kv(content)
+                if key == 'version':
+                    result['version'] = val.strip('"\'')
+                elif key in ('specs', 'rules'):
+                    current_category = key
+                    result.setdefault(current_category, {})
+                    current_doc_type = None
+                    current_field = None
+                continue
+
+            # indent=2: doc_type キー
+            if indent == 2 and current_category and ':' in content:
+                key, _ = _split_kv(content)
+                current_doc_type = key
+                result[current_category].setdefault(current_doc_type, {})
+                current_field = None
+                continue
+
+            # indent=4: フィールド (paths, description)
+            if indent == 4 and current_category and current_doc_type:
+                if ':' in content and not content.startswith('- '):
+                    key, val = _split_kv(content)
+                    current_field = key
+                    if key == 'paths':
+                        if val.startswith('['):
+                            result[current_category][current_doc_type]['paths'] = _parse_flow_array(val)
+                            current_field = None
+                        else:
+                            result[current_category][current_doc_type]['paths'] = []
+                    elif key == 'description':
+                        result[current_category][current_doc_type]['description'] = val.strip('"\'')
+                elif content.startswith('- ') and current_field == 'paths':
+                    path_val = content[2:].strip().strip('"\'')
+                    result[current_category][current_doc_type].setdefault('paths', []).append(path_val)
+                continue
+
+            # indent=6: ブロック配列要素
+            if indent == 6 and current_field == 'paths' and content.startswith('- '):
+                path_val = content[2:].strip().strip('"\'')
+                result[current_category][current_doc_type].setdefault('paths', []).append(path_val)
+                continue
+
+    return result if result.get('version') else None
+
+
+def parse_doc_structure(project_root):
+    """.doc_structure.yaml を読み込み。存在しなければ None を返す"""
+    filepath = project_root / '.doc_structure.yaml'
+    if not filepath.exists():
+        return None
+    try:
+        return _parse_doc_structure_yaml(filepath)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# doc_type → review type マッピング
+# ---------------------------------------------------------------------------
+
+def _doc_type_to_review_type(category, doc_type_name):
+    """doc_structure の category + doc_type_name からレビュー種別を返す"""
+    if category == 'specs':
+        return SPECS_REVIEW_TYPE_MAP.get(doc_type_name, 'generic')
+    elif category == 'rules':
+        return 'generic'
+    return None
+
+
+# ---------------------------------------------------------------------------
+# パスマッチング・種別判定
+# ---------------------------------------------------------------------------
+
+def _path_matches_pattern(file_path, pattern):
+    """ファイルパスがパターン配下にあるか判定。glob * に対応"""
+    pattern_parts = pattern.rstrip('/').split('/')
+    path_parts = file_path.replace('\\', '/').split('/')
+
+    if len(path_parts) < len(pattern_parts):
+        return False
+
+    for i, p_part in enumerate(pattern_parts):
+        if p_part == '*':
+            continue
+        if path_parts[i] != p_part:
+            return False
+    return True
+
+
+def detect_type_from_doc_structure(path_str, doc_structure):
+    """doc_structure のパス定義を使ってファイルの種別を判定"""
+    if not doc_structure:
+        return None
+
+    normalized = path_str.replace('\\', '/')
+    for category in ('specs', 'rules'):
+        for doc_type_name, type_info in doc_structure.get(category, {}).items():
+            for declared_path in type_info.get('paths', []):
+                if _path_matches_pattern(normalized, declared_path):
+                    return _doc_type_to_review_type(category, doc_type_name)
+    return None
+
+
+def get_rules_paths(doc_structure):
+    """rules カテゴリの全パスを取得"""
+    if not doc_structure:
+        return []
+    paths = []
+    for type_info in doc_structure.get('rules', {}).values():
+        paths.extend(type_info.get('paths', []))
+    return paths
+
+
+def get_specs_paths_by_type(doc_structure, review_type):
+    """指定 review type に対応する specs パスを取得"""
+    if not doc_structure:
+        return []
+    for doc_type_name, type_info in doc_structure.get('specs', {}).items():
+        if _doc_type_to_review_type('specs', doc_type_name) == review_type:
+            return type_info.get('paths', [])
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Feature 検出
+# ---------------------------------------------------------------------------
+
+def detect_features_from_doc_structure(project_root, doc_structure):
+    """doc_structure の glob パターンから Feature 名を抽出"""
+    if not doc_structure:
+        return []
+
+    features = set()
+    for doc_type_name, type_info in doc_structure.get('specs', {}).items():
+        for path_pattern in type_info.get('paths', []):
+            parts = path_pattern.rstrip('/').split('/')
+            star_indices = [i for i, p in enumerate(parts) if p == '*']
+            if not star_indices:
+                continue
+
+            star_idx = star_indices[0]
+            prefix = '/'.join(parts[:star_idx])
+            prefix_dir = project_root / prefix if prefix else project_root
+
+            if not prefix_dir.is_dir():
+                continue
+
+            # * の後のサフィックスパーツ
+            suffix_parts = parts[star_idx + 1:]
+
+            for entry in prefix_dir.iterdir():
+                if not entry.is_dir() or entry.name.startswith('.'):
+                    continue
+                if suffix_parts:
+                    check_path = entry
+                    for sp in suffix_parts:
+                        check_path = check_path / sp
+                    if check_path.is_dir():
+                        features.add(entry.name)
+                else:
+                    features.add(entry.name)
+
+    return sorted(features)
+
+
+# ---------------------------------------------------------------------------
+# 共通ユーティリティ
+# ---------------------------------------------------------------------------
 
 def parse_args():
     """引数を解析（フラグと対象を分離）"""
     targets = []
     for arg in sys.argv[1:]:
         if arg.startswith('--'):
-            continue  # フラグはスキップ
+            continue
         targets.append(arg)
     return targets
 
 
 def find_project_root():
     """プロジェクトルートを検出"""
-    current = Path(__file__).parent.absolute()
+    current = Path.cwd()
     for _ in range(10):
         if (current / ".git").exists() or (current / ".claude").exists():
             return current
@@ -67,207 +278,127 @@ def find_project_root():
         if parent == current:
             break
         current = parent
-    # フォールバック: カレントディレクトリ
     return Path.cwd()
 
 
-def load_doc_advisor_config(project_root):
-    """DocAdvisor の config.yaml を読み込む（簡易パーサー）"""
-    config_path = project_root / ".claude" / "doc-advisor" / "config.yaml"
-    if not config_path.exists():
-        return None
+# ---------------------------------------------------------------------------
+# 種別判定
+# ---------------------------------------------------------------------------
 
-    # toc_utils の load_config を利用可能なら使う
-    toc_utils_dir = project_root / ".claude" / "doc-advisor" / "scripts"
-    if toc_utils_dir.exists():
-        sys.path.insert(0, str(toc_utils_dir))
-        try:
-            from toc_utils import load_config
-            return load_config()
-        except ImportError:
-            pass
-        finally:
-            if str(toc_utils_dir) in sys.path:
-                sys.path.remove(str(toc_utils_dir))
-
-    # フォールバック: 最小限のパース
-    return _minimal_parse_config(config_path)
-
-
-def _minimal_parse_config(config_path):
-    """config.yaml の最小限パース（toc_utils が使えない場合）"""
-    result = {'specs': {'root_dir': 'specs', 'patterns': {'target_dirs': {}}}}
-    with open(config_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            stripped = line.strip()
-            if stripped.startswith('root_dir:'):
-                # 直前のセクションに応じて振り分け
-                val = stripped.split(':', 1)[1].strip().strip('"\'')
-                result['specs']['root_dir'] = val
-            elif stripped.startswith('requirement:'):
-                val = stripped.split(':', 1)[1].strip().strip('"\'')
-                result['specs']['patterns']['target_dirs']['requirement'] = val
-            elif stripped.startswith('design:'):
-                val = stripped.split(':', 1)[1].strip().strip('"\'')
-                result['specs']['patterns']['target_dirs']['design'] = val
-    return result
-
-
-def get_specs_root(config):
-    """specs ルートディレクトリを取得"""
-    if config and 'specs' in config:
-        return config['specs'].get('root_dir', 'specs').rstrip('/')
-    return 'specs'
-
-
-def get_target_dirs(config):
-    """種別→ディレクトリ名のマッピングを取得"""
-    defaults = {'requirement': 'requirements', 'design': 'design'}
-    if config and 'specs' in config:
-        patterns = config['specs'].get('patterns', {})
-        target_dirs = patterns.get('target_dirs', {})
-        if target_dirs:
-            return {**defaults, **target_dirs}
-    return defaults
-
-
-def detect_features(project_root, specs_root):
-    """specs ディレクトリ配下の Feature 一覧を取得"""
-    specs_dir = project_root / specs_root
-    if not specs_dir.is_dir():
-        return []
-
-    features = []
-    for entry in sorted(specs_dir.iterdir()):
-        if entry.is_dir() and not entry.name.startswith('.'):
-            features.append(entry.name)
-    return features
-
-
-def _detect_generic_type(path_str):
+def _detect_generic_type(path_str, doc_structure=None):
     """generic 種別の判定（基盤文書パターン）"""
-    for pattern in GENERIC_PATH_PATTERNS:
+    # rules パスを doc_structure から動的取得
+    rules_paths = get_rules_paths(doc_structure) if doc_structure else ['rules/']
+    all_patterns = GENERIC_BASE_PATTERNS + rules_paths
+
+    for pattern in all_patterns:
         if path_str.startswith(pattern) or f'/{pattern}' in path_str:
             return "generic"
+
     filename = Path(path_str).name
     if filename in GENERIC_ROOT_FILES and '/' not in path_str.rstrip('/'):
         return "generic"
     return None
 
 
-def detect_type_from_path(path_str, config, project_root):
+def detect_type_from_path(path_str, doc_structure, project_root):
     """パスから種別を判定"""
-    # 1. コードファイル判定（拡張子ベース - 汎用）
+    # 1. コードファイル判定（拡張子ベース）
     _, ext = os.path.splitext(path_str)
     if ext.lower() in CODE_EXTENSIONS:
         return "code"
 
-    # 2. DocAdvisor config がある場合、ディレクトリ構造から判定
-    if config:
-        specs_root = get_specs_root(config)
-        target_dirs = get_target_dirs(config)
+    # 2. .doc_structure.yaml パスマッチ
+    ds_type = detect_type_from_doc_structure(path_str, doc_structure)
+    if ds_type:
+        return ds_type
 
-        for review_type, dir_name in target_dirs.items():
-            # specs/{feature}/{dir_name}/ のパターンにマッチするか
-            if f'/{dir_name}/' in path_str or path_str.startswith(f'{specs_root}/'):
-                # より正確にチェック: specs_root 配下で dir_name を含むか
-                parts = Path(path_str).parts
-                if dir_name in parts:
-                    return review_type
-
-        # plan は config に含まれない（exclude されている）が、ディレクトリ名で判定
-        parts = Path(path_str).parts
-        if 'plan' in parts:
-            return "plan"
-
-    # 3. 基盤文書パターン → generic（既存4種別の後に判定）
-    generic_type = _detect_generic_type(path_str)
+    # 3. 基盤文書パターン → generic
+    generic_type = _detect_generic_type(path_str, doc_structure)
     if generic_type:
         return generic_type
 
     return None
 
 
-def detect_type_from_dir(dir_path, config, project_root):
+def detect_type_from_dir(dir_path, doc_structure, project_root):
     """ディレクトリ内のファイルから種別を判定"""
     dir_p = project_root / dir_path
     if not dir_p.is_dir():
         return None, []
 
-    # コードファイルを探す
     code_files = []
     for ext in CODE_EXTENSIONS:
         code_files.extend(glob.glob(str(dir_p / '**' / f'*{ext}'), recursive=True))
 
-    # ドキュメントファイルを探す
     md_files = sorted(glob.glob(str(dir_p / '**' / '*.md'), recursive=True))
 
-    if code_files and not md_files:
+    if code_files:
+        # コード+md 混在（src/ に README.md がある等）も code として扱う
         rel_files = [str(Path(f).relative_to(project_root)) for f in code_files]
         return "code", sorted(rel_files)
-    elif md_files and not code_files:
-        # 最初のファイルから種別を推定
+    elif md_files:
         first_rel = str(Path(md_files[0]).relative_to(project_root))
-        review_type = detect_type_from_path(first_rel, config, project_root)
+        review_type = detect_type_from_path(first_rel, doc_structure, project_root)
         rel_files = [str(Path(f).relative_to(project_root)) for f in md_files]
         return review_type, sorted(rel_files)
 
     return None, []
 
 
-def find_feature_subdirs(project_root, specs_root, feature, target_dirs):
-    """Feature 内で存在する種別サブディレクトリを検出"""
-    available = []
-    feature_dir = project_root / specs_root / feature
+# ---------------------------------------------------------------------------
+# Feature 解決
+# ---------------------------------------------------------------------------
 
-    if not feature_dir.is_dir():
+def find_feature_subdirs(project_root, doc_structure, feature):
+    """Feature 内で存在する種別サブディレクトリを検出（doc_structure ベース）"""
+    available = []
+    if not doc_structure:
         return available
 
-    # config で定義されている種別をチェック
-    for review_type, dir_name in target_dirs.items():
-        subdir = feature_dir / dir_name
-        if subdir.is_dir() and any(subdir.rglob('*.md')):
-            available.append(review_type)
-
-    # plan は config に含まれないが、ディレクトリが存在すれば追加
-    plan_dir = feature_dir / 'plan'
-    if plan_dir.is_dir() and any(plan_dir.rglob('*.md')):
-        available.append('plan')
-
+    for doc_type_name, type_info in doc_structure.get('specs', {}).items():
+        review_type = _doc_type_to_review_type('specs', doc_type_name)
+        for path_pattern in type_info.get('paths', []):
+            if '*' not in path_pattern:
+                continue
+            # パターン中の * を feature 名に置換して存在確認
+            concrete = path_pattern.replace('*', feature, 1)
+            concrete_dir = project_root / concrete.rstrip('/')
+            if concrete_dir.is_dir() and any(concrete_dir.rglob('*.md')):
+                if review_type not in available:
+                    available.append(review_type)
     return available
 
 
-def find_target_files(project_root, specs_root, feature, review_type, target_dirs):
-    """Feature + 種別からファイル一覧を取得"""
-    type_to_dir = {**target_dirs, 'plan': 'plan'}
-    dir_name = type_to_dir.get(review_type)
-    if not dir_name:
+def find_target_files(project_root, doc_structure, feature, review_type):
+    """Feature + 種別からファイル一覧を取得（doc_structure ベース）"""
+    if not doc_structure:
         return []
 
-    pattern = str(project_root / specs_root / feature / dir_name / '**' / '*.md')
-    files = sorted(glob.glob(pattern, recursive=True))
-    return [str(Path(f).relative_to(project_root)) for f in files]
+    for doc_type_name, type_info in doc_structure.get('specs', {}).items():
+        if _doc_type_to_review_type('specs', doc_type_name) != review_type:
+            continue
+        for path_pattern in type_info.get('paths', []):
+            if '*' not in path_pattern:
+                continue
+            concrete = path_pattern.replace('*', feature, 1)
+            pattern = str(project_root / concrete.rstrip('/') / '**' / '*.md')
+            files = sorted(glob.glob(pattern, recursive=True))
+            if files:
+                return [str(Path(f).relative_to(project_root)) for f in files]
+    return []
 
 
-def find_reference_docs(project_root, review_type):
-    """種別に応じた参考文書を探索
+# ---------------------------------------------------------------------------
+# 対象解決
+# ---------------------------------------------------------------------------
 
-    注: review_criteria_path はプラグインの review SKILL.md が
-    3階層フォールバックで別途解決するため、ここでは含めない。
-    """
-    refs = []
-    # 将来の拡張: 種別に応じた追加参考文書をここで収集可能
-    return refs
-
-
-def _resolve_single_target(target, config, project_root, specs_root,
-                            target_dirs, features, result):
+def _resolve_single_target(target, doc_structure, project_root, features, result):
     """単一の対象（ファイル/ディレクトリ/Feature名）を解決"""
     target_path = Path(target)
 
     if (project_root / target_path).is_file():
-        # ファイル指定
-        result["type"] = detect_type_from_path(target, config, project_root)
+        result["type"] = detect_type_from_path(target, doc_structure, project_root)
         result["target_files"] = [target]
 
         if result["type"] is None:
@@ -278,8 +409,7 @@ def _resolve_single_target(target, config, project_root, specs_root,
             })
 
     elif (project_root / target_path).is_dir():
-        # ディレクトリ指定
-        detected_type, files = detect_type_from_dir(target, config, project_root)
+        detected_type, files = detect_type_from_dir(target, doc_structure, project_root)
         result["type"] = detected_type
         result["target_files"] = files
 
@@ -297,14 +427,12 @@ def _resolve_single_target(target, config, project_root, specs_root,
             })
 
     elif target in features:
-        # Feature 名指定
-        available_types = find_feature_subdirs(
-            project_root, specs_root, target, target_dirs)
+        available_types = find_feature_subdirs(project_root, doc_structure, target)
 
         if len(available_types) == 1:
             result["type"] = available_types[0]
             result["target_files"] = find_target_files(
-                project_root, specs_root, target, available_types[0], target_dirs)
+                project_root, doc_structure, target, available_types[0])
         elif len(available_types) > 1:
             result["questions"].append({
                 "key": "type",
@@ -319,7 +447,6 @@ def _resolve_single_target(target, config, project_root, specs_root,
             })
 
     else:
-        # パスが見つからない
         result["questions"].append({
             "key": "target",
             "message": f"'{target}' が見つかりません。レビュー対象のファイルまたはディレクトリを指定してください。",
@@ -327,7 +454,7 @@ def _resolve_single_target(target, config, project_root, specs_root,
         })
 
 
-def _resolve_multiple_targets(targets, config, project_root, result):
+def _resolve_multiple_targets(targets, doc_structure, project_root, result):
     """複数ファイル対象を解決"""
     valid_files = []
     missing = []
@@ -344,14 +471,13 @@ def _resolve_multiple_targets(targets, config, project_root, result):
             "message": f"以下のファイルが見つかりません: {', '.join(missing)}",
             "options": []
         })
-        # 見つかったファイルは target_files に含める
         result["target_files"] = valid_files
         return
 
     result["target_files"] = valid_files
 
     # 種別判定: 最初のファイルで判定
-    result["type"] = detect_type_from_path(valid_files[0], config, project_root)
+    result["type"] = detect_type_from_path(valid_files[0], doc_structure, project_root)
 
     if result["type"] is None:
         result["questions"].append({
@@ -361,38 +487,50 @@ def _resolve_multiple_targets(targets, config, project_root, result):
         })
 
 
+# ---------------------------------------------------------------------------
+# メイン
+# ---------------------------------------------------------------------------
+
 def main():
     targets = parse_args()
 
     project_root = find_project_root()
     os.chdir(project_root)
 
-    config = load_doc_advisor_config(project_root)
-    has_doc_advisor = config is not None
+    # .doc_structure.yaml を読み込む（必須）
+    doc_structure = parse_doc_structure(project_root)
+    has_doc_structure = doc_structure is not None
 
-    specs_root = get_specs_root(config)
-    target_dirs = get_target_dirs(config) if has_doc_advisor else {}
+    if not has_doc_structure:
+        # .doc_structure.yaml がなければエラー
+        print(json.dumps({
+            "status": "error",
+            "has_doc_structure": False,
+            "type": None,
+            "target_files": [],
+            "features": [],
+            "questions": [],
+            "error": ".doc_structure.yaml が見つかりません。/doc-structure:init-doc-structure を実行して作成してください。"
+        }, ensure_ascii=False, indent=2))
+        return
 
-    features = detect_features(project_root, specs_root) if has_doc_advisor else []
+    features = detect_features_from_doc_structure(project_root, doc_structure)
 
     result = {
         "status": "resolved",
-        "has_doc_advisor": has_doc_advisor,
+        "has_doc_structure": True,
         "type": None,
         "target_files": [],
-        "reference_docs": [],
         "features": features,
         "questions": []
     }
 
     if len(targets) > 1:
-        # 複数ファイル指定
-        _resolve_multiple_targets(targets, config, project_root, result)
+        _resolve_multiple_targets(targets, doc_structure, project_root, result)
 
     elif len(targets) == 1:
-        # 単一対象（ファイル/ディレクトリ/Feature名）
-        _resolve_single_target(targets[0], config, project_root, specs_root,
-                               target_dirs, features, result)
+        _resolve_single_target(targets[0], doc_structure, project_root,
+                               features, result)
 
     else:
         # 対象未指定
@@ -408,10 +546,6 @@ def main():
                 "message": "レビュー対象のファイルまたはディレクトリを指定してください。",
                 "options": []
             })
-
-    # 参考文書の収集
-    if result["type"]:
-        result["reference_docs"] = find_reference_docs(project_root, result["type"])
 
     # ステータス判定
     if result["questions"]:

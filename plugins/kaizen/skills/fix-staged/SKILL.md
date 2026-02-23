@@ -11,14 +11,14 @@ argument-hint: "<修正モード> (--single | --batch)"
 # /fix-staged Skill
 
 レビュー指摘事項に基づいてコード・文書を修正する AI 専用 Skill。
-DocAdvisor で参考文書を収集し、general-purpose subagent に修正を委譲する。
+参考文書を収集し（DocAdvisor Skill または `.doc_structure.yaml` パスで Glob）、general-purpose subagent に修正を委譲する。
 
 ## 設計原則
 
 | 原則 | 説明 |
 |------|------|
 | 修正の実行は subagent | メインコンテキストの消費を抑え、修正のコード Read/Edit を subagent 側で完結させる |
-| DocAdvisor で参考文書取得 | 設計意図・ルールを踏まえた修正を保証する |
+| 参考文書取得（DocAdvisor Skill or .doc_structure.yaml） | 設計意図・ルールを踏まえた修正を保証する |
 | 呼び出し元が入力に責任を持つ | 指摘事項・対象ファイル・種別を漏れなく渡す責務は呼び出し元にある |
 
 ## 入力・やりかた・Agent・出力
@@ -26,8 +26,8 @@ DocAdvisor で参考文書を収集し、general-purpose subagent に修正を�
 | 観点 | 内容 |
 |------|------|
 | **入力** | ① 修正対象の指摘事項（テキスト） ② 対象ファイルパス ③ レビュー種別 ④ 修正方針（任意） |
-| **やりかた** | DocAdvisor で参考文書取得 → general-purpose subagent に修正を委譲 |
-| **Agent** | DocAdvisor 呼び出し: メインコンテキスト / 修正実行: general-purpose subagent |
+| **やりかた** | 参考文書取得（DocAdvisor Skill or `.doc_structure.yaml` パスで Glob）→ general-purpose subagent に修正を委譲 |
+| **Agent** | DocAdvisor Skill 呼び出し: メインコンテキスト / 修正実行: general-purpose subagent |
 | **出力** | 修正サマリー（修正ファイル・修正内容・影響範囲） |
 
 ---
@@ -56,58 +56,50 @@ DocAdvisor で参考文書を収集し、general-purpose subagent に修正を�
 
 ## ワークフロー
 
+> **前提条件**: `.doc_structure.yaml` がプロジェクトルートに存在すること。
+> 呼び出し元（`/kaizen:review` または `/kaizen:present-staged`）が事前に存在確認している前提で動作する。
+
 ### Step 1: 入力の受け取り
 
 呼び出し元から指摘事項・対象ファイル・レビュー種別・修正方針を受け取る。
 
 入力が不足している場合は呼び出し元にエラーを返す（ユーザーに直接質問しない）。
 
-### Step 2: DocAdvisor で参考文書収集 [MANDATORY]
+### Step 2: 参考文書収集 [MANDATORY]
 
-指摘事項の内容と対象ファイルに基づき、DocAdvisor で参考文書を収集する。
+指摘事項の内容と対象ファイルに基づき、参考文書を収集する。
 
 #### 2.0 generic 種別の場合
 
-review Phase 2 と同様、rules-advisor / specs-advisor は**使用しない**。
+review Phase 2 と同様、`/query-rules` / `/query-specs` は**使用しない**。
 参考文書は最小限:
 - `{review_criteria_path}` の「5. 汎用文書レビュー観点」（存在すれば）
 
-> `{review_criteria_path}` は `/kaizen:review` の「レビュー観点の探索」と同じ3階層フォールバックで決定する:
-> 1. DocAdvisor（rules-advisor）→ 2. `.claude/review-config.yaml` → 3. `${CLAUDE_PLUGIN_ROOT}/defaults/review_criteria.md`
+> `{review_criteria_path}` は `/kaizen:review` の「レビュー観点の探索」と同じフォールバックで決定する:
+> 1. `/query-rules` Skill（利用不可ならスキップ）→ 2. `.claude/review-config.yaml` → 3. `${CLAUDE_PLUGIN_ROOT}/defaults/review_criteria.md`
 
 generic 以外の種別 → 2.1 へ進む。
 
-#### 2.1 rules-advisor 呼び出し
+#### 2.1 DocAdvisor Skill を試行
 
-```
-subagent_type: rules-advisor
-prompt: |
-  以下の修正作業に必要なルール文書を特定してください。
+`.claude/skills/query-rules/SKILL.md` が存在するか確認する。存在すれば DocAdvisor が利用可能と判断し、以下の Skill を呼び出す:
 
-  修正内容: [指摘事項の要約]
-  対象ファイル: [ファイルパス]
-  レビュー種別: [種別]
-```
+- `/query-rules` に「修正作業に必要なルール文書」を問い合わせ
+  - 問い合わせ内容: 修正内容の要約、対象ファイル、レビュー種別
+- `/query-specs` に「修正作業に必要な要件定義書・設計書」を問い合わせ
+  - 問い合わせ内容: 修正内容の要約、対象ファイル
 
-#### 2.2 specs-advisor 呼び出し
+DocAdvisor が利用不可（`.claude/skills/query-rules/SKILL.md` が存在しない等）の場合、2.2 のフォールバックに移行する。
 
-```
-subagent_type: specs-advisor
-prompt: |
-  以下の修正作業に必要な要件定義書・設計書を特定してください。
+#### 2.2 DocAdvisor 利用不可時のフォールバック
 
-  修正内容: [指摘事項の要約]
-  対象ファイル: [ファイルパス]
-```
+`.doc_structure.yaml` のパス定義を使って参考文書を収集する:
 
-#### 2.3 DocAdvisor 未接続時のフォールバック
-
-DocAdvisor（`.claude/doc-advisor/config.yaml`）が存在しない場合：
-
-1. Glob で `rules/**/*.md` を探索し、レビュー種別に関連しそうなファイルを収集
-2. `{review_criteria_path}` を参照に含める
-3. 見つからないファイルはスキップ（エラーにしない）
-4. 参考文書なしでも修正は試みる（指摘事項の情報のみで実行）
+1. `.doc_structure.yaml` の `rules` カテゴリの `paths` から rules 文書を Glob 探索
+2. `.doc_structure.yaml` の `specs` カテゴリの `paths` から関連仕様書を Glob 探索
+3. `{review_criteria_path}` を参照に含める
+4. 見つからないファイルはスキップ（エラーにしない）
+5. 参考文書なしでも修正は試みる（指摘事項の情報のみで実行）
 
 ### Step 3: subagent 起動 [MANDATORY]
 
@@ -145,9 +137,9 @@ subagent の修正サマリーを呼び出し元に返す。呼び出し元（/k
 
 ## 参考文書（全て Read して理解すること）
 ### ルール文書
-[rules-advisor の結果リスト]
+[収集したルール文書パスリスト]
 ### 要件定義書・設計書
-[specs-advisor の結果リスト]
+[収集した仕様書パスリスト]
 
 ## 指示
 - 指摘事項に記載された問題のみを修正する
@@ -184,9 +176,9 @@ subagent の修正サマリーを呼び出し元に返す。呼び出し元（/k
 
 ## 参考文書（全て Read して理解すること）
 ### ルール文書
-[rules-advisor の結果リスト]
+[収集したルール文書パスリスト]
 ### 要件定義書・設計書
-[specs-advisor の結果リスト]
+[収集した仕様書パスリスト]
 
 ## 指示
 - 指摘事項に記載された問題のみを修正する
@@ -212,7 +204,7 @@ subagent の修正サマリーを呼び出し元に返す。呼び出し元（/k
 | エラー | 対応 |
 |--------|------|
 | 入力不足（指摘事項なし・対象ファイルなし） | 呼び出し元にエラーを返す。ユーザーに直接質問しない |
-| DocAdvisor 未接続 | フォールバック手順に従う（Step 2.3 参照） |
+| DocAdvisor Skill 利用不可 | フォールバック手順に従う（Step 2.2 参照） |
 | subagent 起動失敗 | エラー内容を呼び出し元に返す |
 | subagent が修正失敗を報告 | エラー内容を呼び出し元に返す。呼び出し元がユーザーに報告 |
 | subagent が指摘事項と無関係な変更を報告 | 呼び出し元がサマリーを確認し、ユーザーに報告して判断を仰ぐ |

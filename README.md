@@ -104,7 +104,7 @@ AI-powered code & document review with staged presentation and auto-fix.
 |-------|---------------|-------------|
 | `review` | Yes | Main review skill. Detects review type, collects references, and executes review |
 | `present-staged` | No (AI only) | Presents review findings interactively, one item at a time |
-| `fix-staged` | No (AI only) | Fixes issues based on review findings with DocAdvisor-informed context |
+| `fix-staged` | No (AI only) | Fixes issues based on review findings with reference doc collection (DocAdvisor or .doc_structure.yaml) |
 
 ### Review Types
 
@@ -128,7 +128,7 @@ AI-powered code & document review with staged presentation and auto-fix.
 
 The plugin includes default review criteria in `defaults/review_criteria.md`. Projects can override this by:
 
-1. **DocAdvisor**: If the project uses DocAdvisor, the plugin queries it for project-specific review criteria
+1. **DocAdvisor**: If the project has DocAdvisor skills (`/query-rules`), the plugin queries them for project-specific review criteria
 2. **Project config**: Save a custom path in `.claude/review-config.yaml`
 3. **Plugin default**: Falls back to the bundled `defaults/review_criteria.md`
 

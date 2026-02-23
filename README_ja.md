@@ -104,7 +104,7 @@ AI によるコード・文書レビュー。段階的な対話提示と自動�
 |--------|-----------------|------|
 | `review` | 可能 | メインのレビュースキル。種別判定、参考文書収集、レビュー実行 |
 | `present-staged` | AI 専用 | レビュー結果を段階的・対話的に提示 |
-| `fix-staged` | AI 専用 | レビュー指摘に基づく修正を実行。DocAdvisor で参考文書を収集して修正 |
+| `fix-staged` | AI 専用 | レビュー指摘に基づく修正を実行。参考文書を収集し（DocAdvisor Skill or .doc_structure.yaml）修正 |
 
 ### レビュー種別
 
@@ -128,7 +128,7 @@ AI によるコード・文書レビュー。段階的な対話提示と自動�
 
 プラグインにはデフォルトのレビュー観点が `defaults/review_criteria.md` に同梱されています。プロジェクト固有の観点を使用する場合は以下の優先順で解決されます:
 
-1. **DocAdvisor**: プロジェクトに DocAdvisor がある場合、プロジェクト固有のレビュー観点を動的に取得
+1. **DocAdvisor**: プロジェクトに DocAdvisor Skill（`/query-rules`）がある場合、プロジェクト固有のレビュー観点を動的に取得
 2. **プロジェクト設定**: `.claude/review-config.yaml` にカスタムパスを保存
 3. **プラグインデフォルト**: 同梱の `defaults/review_criteria.md` にフォールバック
 

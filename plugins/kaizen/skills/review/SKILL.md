@@ -82,7 +82,9 @@ description: |
 4. **環境確認**（順に実行し、利用可能な機能セットを決定）:
    ```
    1. which codex → エンジン決定
-   2. .claude/doc-advisor/config.yaml の存在確認 → DocAdvisor利用可否
+   2. .doc_structure.yaml の存在確認
+      - なければ /doc-structure:init-doc-structure を起動し作成を促す
+      - 作成されなければエラー終了
    3. レビュー観点定義の探索（後述「レビュー観点の探索」参照）
    4. 不足があればユーザーに通知（何が使えて何が使えないか）
    ```
@@ -91,7 +93,8 @@ description: |
 
 以下の優先順で検索し、最初に見つかったものを `{review_criteria_path}` として以降のフェーズで使用する:
 
-1. **DocAdvisor（rules-advisor）** に「レビュー観点の文書」を問い合わせ → パスを動的に特定
+1. **`/query-rules` Skill**（DocAdvisor）に「レビュー観点の文書」を問い合わせ → パスを動的に特定
+   - 利用可否: `.claude/skills/query-rules/SKILL.md` の存在で判断（利用不可ならスキップ）
 2. **`.claude/review-config.yaml`** に保存済みのパスがあれば使用
 3. **`${CLAUDE_PLUGIN_ROOT}/defaults/review_criteria.md`**（プラグイン同梱のデフォルト）
 
@@ -110,25 +113,27 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts/resolve_review_context.py [�
 ```
 
 スクリプトは以下を自動判定する:
-- DocAdvisor の有無（`config.yaml` の存在で判定）
-- DocAdvisor あり → `config.yaml` のディレクトリ構造定義から種別・Feature を検出
-- DocAdvisor なし → ソースコード拡張子で判定、ドキュメントは判定不能
-- Feature 一覧の検出（DocAdvisor あり時）
+- `.doc_structure.yaml` を読み込み、パス定義から種別・Feature を検出
+- `.doc_structure.yaml` がなければ `error` ステータスを返す
+- コードファイルは拡張子で判定
 
 #### スクリプト出力の処理
 
 ```json
 {
-  "status": "resolved | needs_input",
+  "status": "resolved | needs_input | error",
+  "has_doc_structure": true,
   "type": "requirement | design | code | plan | generic | null",
   "target_files": ["path1", ...],
   "features": ["feature1", ...],
-  "questions": [{"key": "type|feature|target", "message": "...", "options": [...]}]
+  "questions": [{"key": "type|feature|target", "message": "...", "options": [...]}],
+  "error": "エラーメッセージ（status=error 時のみ）"
 }
 ```
 
 - `status: "resolved"` → Phase 2 へ進む
 - `status: "needs_input"` → `questions` の内容をユーザーに提示し、回答を得てから再実行
+- `status: "error"` → 通常は Phase 1 step 2 で解決済み。タイミング問題等で発生した場合は `/doc-structure:init-doc-structure` を起動し `.doc_structure.yaml` の作成を促す。作成後にスクリプトを再実行
 
 #### code で対象未指定の場合
 
@@ -144,7 +149,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/skills/review/scripts/resolve_review_context.py [�
 
 #### generic 種別の場合
 
-rules-advisor / specs-advisor は**使用しない**。
+`/query-rules` / `/query-specs` は**使用しない**。
 
 参考文書は最小限:
 - `{review_criteria_path}` の「5. 汎用文書レビュー観点」
@@ -152,19 +157,26 @@ rules-advisor / specs-advisor は**使用しない**。
 レビュアー（Codex / Claude subagent）が自発的に関連文書を探索することを期待する。
 対象ファイルと review_criteria のみをプロンプトに含める。
 
-#### DocAdvisor あり
+#### DocAdvisor Skill を試行
 
-- `rules-advisor` Subagent → レビュー種別に関連するルール文書を特定
-- `specs-advisor` Subagent → 関連する要件定義書・設計書を特定（存在する場合）
+`.claude/skills/query-rules/SKILL.md` が存在するか確認する。存在すれば DocAdvisor が利用可能と判断し、以下の Skill を呼び出す:
+
+- `/query-rules` Skill → レビュー種別に関連するルール文書を特定
+- `/query-specs` Skill → 関連する要件定義書・設計書を特定（存在する場合）
 - `{review_criteria_path}` の該当セクション参照
 
-#### DocAdvisor なし
+DocAdvisor が利用不可（`.claude/skills/query-rules/SKILL.md` が存在しない等）の場合、以下のフォールバックに移行する。
 
-DocAdvisor がなければ ToC（`rules_toc.yaml` / `specs_toc.yaml`）も存在しない。
-最低限の参考文書を収集する:
+#### DocAdvisor 利用不可時のフォールバック
+
+`.doc_structure.yaml` のパス定義を使って参考文書を収集する:
 
 - `{review_criteria_path}` を参照
-- Glob で `rules/**/*.md` を探索し、種別に関連しそうなファイルを収集
+- `.doc_structure.yaml` の `rules` カテゴリの `paths` から rules 文書を Glob 探索
+  - 例: `paths: [rules/]` → `rules/**/*.md` を探索
+  - 例: `paths: [rules/workflow/]` → `rules/workflow/**/*.md` を探索
+- `.doc_structure.yaml` の `specs` カテゴリの `paths` から、レビュー種別に関連する仕様書を Glob 探索
+  - 例: requirement レビュー時に design の paths から関連設計書を探索
 - 見つからないファイルはスキップ（エラーにしない）
 
 ---
@@ -289,7 +301,7 @@ prompt: |
 - 対象ファイル: target_files
 - レビュー種別: review_type
 
-fix-staged が DocAdvisor で参考文書を収集し、general-purpose subagent に修正を委譲する。
+fix-staged が参考文書を収集し（DocAdvisor Skill または `.doc_structure.yaml` パスで Glob）、general-purpose subagent に修正を委譲する。
 
 ##### Step 2: 再レビュー
 
@@ -374,10 +386,10 @@ fix-staged が DocAdvisor で参考文書を収集し、general-purpose subagent
 
 ## レビュー種別ごとの参考文書
 
-| レビュー種別 | rules-advisorで取得 | specs-advisorで取得 |
-|-------------|-------------------|---------------------|
-| 要件定義書 | 種別に関連するルール文書（advisor が動的に決定） | 関連する他の要件定義書 |
-| 設計書 | 種別に関連するルール文書（advisor が動的に決定） | 関連要件定義書、既存設計書 |
-| 計画書 | 種別に関連するルール文書（advisor が動的に決定） | 関連要件定義書、設計書 |
-| コード | 種別に関連するルール文書（advisor が動的に決定） | 関連要件定義書、設計書 |
+| レビュー種別 | DocAdvisor Skill（利用可能時） | .doc_structure.yaml フォールバック |
+|-------------|-------------------------------|----------------------------------|
+| 要件定義書 | /query-rules: 関連ルール文書 / /query-specs: 関連要件定義書 | rules パスから Glob + specs パスから Glob |
+| 設計書 | /query-rules: 関連ルール文書 / /query-specs: 関連要件定義書・設計書 | rules パスから Glob + specs パスから Glob |
+| 計画書 | /query-rules: 関連ルール文書 / /query-specs: 関連要件定義書・設計書 | rules パスから Glob + specs パスから Glob |
+| コード | /query-rules: 関連ルール文書 / /query-specs: 関連要件定義書・設計書 | rules パスから Glob + specs パスから Glob |
 | 汎用文書 | **不使用**（レビュアーが自発探索） | **不使用** |

@@ -1,7 +1,7 @@
 # レビュー観点（デフォルト）
 
 プロジェクト固有のレビュー観点がない場合に使用するデフォルト定義。
-プロジェクトに独自の観点定義がある場合は、DocAdvisor または `.claude/review-config.yaml` 経由でそちらが優先される。
+プロジェクトに独自の観点定義がある場合は、DocAdvisor の `/query-rules` Skill または `.claude/review-config.yaml` 経由でそちらが優先される。
 
 ## 1. 要件定義書レビュー観点
 

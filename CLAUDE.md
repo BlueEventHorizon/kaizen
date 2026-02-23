@@ -52,13 +52,13 @@ python3 plugins/doc-structure/scripts/classify_dirs.py [プロジェクトルー
 ### レビュー観点の3階層フォールバック
 
 review スキルがレビュー観点を探索する優先順位：
-1. **DocAdvisor** — `rules-advisor` subagent が動的にプロジェクト固有の観点を特定
+1. **DocAdvisor** — `/query-rules` Skill が動的にプロジェクト固有の観点を特定（`.claude/skills/query-rules/SKILL.md` で利用可否判断）
 2. **プロジェクト設定** — `.claude/review-config.yaml`
 3. **プラグインデフォルト** — `plugins/kaizen/defaults/review_criteria.md`
 
 ### レビュー種別
 
-`code` / `requirement` / `design` / `plan` / `generic` の5種別。`generic` の場合は `rules-advisor` / `specs-advisor` を使用せず最小限のレビュー観点のみ適用する。
+`code` / `requirement` / `design` / `plan` / `generic` の5種別。`generic` の場合は `/query-rules` / `/query-specs` を使用せず最小限のレビュー観点のみ適用する。
 
 ### doc-structure プラグイン
 
