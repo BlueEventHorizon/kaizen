@@ -169,15 +169,16 @@ DocAdvisor が利用不可（`.claude/skills/query-rules/SKILL.md` が存在し�
 
 #### DocAdvisor 利用不可時のフォールバック
 
-`.doc_structure.yaml` のパス定義を使って参考文書を収集する:
+`/doc-structure:where --resolve` を呼び出して全パス（glob 展開＋exclude 適用済み）を取得し、参考文書を収集する:
 
 - `{review_criteria_path}` を参照
-- `.doc_structure.yaml` の `rules` カテゴリの `paths` から rules 文書を Glob 探索
-  - 例: `paths: [rules/]` → `rules/**/*.md` を探索
-  - 例: `paths: [rules/workflow/]` → `rules/workflow/**/*.md` を探索
-- `.doc_structure.yaml` の `specs` カテゴリの `paths` から、レビュー種別に関連する仕様書を Glob 探索
-  - 例: requirement レビュー時に design の paths から関連設計書を探索
+- `where --resolve` の `rules` カテゴリのパスから rules 文書を Glob 探索
+  - 例: `rules/` → `rules/**/*.md` を探索
+- `where --resolve` の `specs` カテゴリから、レビュー種別に関連する仕様書を Glob 探索
+  - 例: requirement レビュー時に design のパスから関連設計書を探索
 - 見つからないファイルはスキップ（エラーにしない）
+
+> **注**: `where --resolve` が exclude 適用済みのパスを返すため、consumer 側で exclude を考慮する必要はない。
 
 ---
 

@@ -22,6 +22,17 @@ This file declares where different types of documents live, enabling other tools
 
 ## Procedure
 
+### Step 0: 引数解析
+
+`$ARGUMENTS` を解析する:
+- `--auto` を検索（単語単位: 完全一致）
+  - 見つかった場合 → 自動モード（Step 3 の対話的確認をスキップ）
+- その他の引数 → 無視（将来の拡張用に予約）
+
+引数例:
+- `/doc-structure:init-doc-structure` → 対話モード
+- `/doc-structure:init-doc-structure --auto` → 自動モード
+
 ### Step 1: Check existing file
 
 Read `.doc_structure.yaml` at the project root.
@@ -48,7 +59,21 @@ Present the detected structure and ask the user to confirm or adjust using AskUs
 1. **Category confirmation**: Are these directories correctly classified as rules/specs?
 2. **Doc type confirmation**: Are the doc_type names correct? (requirement, design, plan, rule, etc.)
 3. **Missing directories**: Are there additional document directories to include?
-4. **Directories to remove**: Should any detected directories be excluded?
+4. **Directories to remove**: Should any detected directories be excluded from the structure entirely?
+5. **Exclude patterns**: For doc_types with glob paths (`*`), show expanded results and ask if any matched directories should be excluded.
+   - Example presentation:
+     ```
+     specs/requirement の paths: ["specs/*/requirements/"]
+     展開結果:
+       specs/login/requirements/
+       specs/auth/requirements/
+       specs/archived/requirements/
+       specs/_template/requirements/
+
+     除外するディレクトリ名はありますか？（例: archived, _template）
+     ```
+   - User response → `exclude` field に追加
+   - Glob paths がない doc_type はこのステップをスキップ
 
 If `--auto` argument is provided, skip confirmation and use detected results directly.
 
@@ -89,11 +114,13 @@ version: "1.0"
 specs:
   <doc_type>:
     paths: [<dir_path>, ...]
-    description: "<optional>"  # optional
+    exclude: ["<dir_name>", ...]  # optional, directory name match
+    description: "<optional>"     # optional
 
 rules:
   <doc_type>:
     paths: [<dir_path>, ...]
+    exclude: ["<dir_name>", ...]  # optional
 ```
 
 ### Recommended doc_type names

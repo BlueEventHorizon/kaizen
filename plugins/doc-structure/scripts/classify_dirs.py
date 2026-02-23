@@ -42,6 +42,9 @@ SKIP_DIRS = {
 # Files that indicate a directory is not a documentation directory
 SKIP_INDICATORS = {'package.json', 'Cargo.toml', 'go.mod', 'pom.xml', 'setup.py', 'pyproject.toml'}
 
+# confidence 値の順序（数値が大きいほど高信頼度）
+_CONFIDENCE_ORDER = {'low': 0, 'medium': 1, 'high': 2}
+
 # Term indicators for category classification (rules vs specs)
 RULE_TERMS = [
     r'\bmust\b', r'\bshall\b', r'\bshould not\b', r'\bmust not\b',
@@ -112,7 +115,7 @@ def find_md_dirs(project_root):
     results = []
     root = Path(project_root)
 
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         current = Path(dirpath)
         rel = current.relative_to(root)
         rel_str = str(rel)
@@ -368,60 +371,71 @@ def aggregate_to_top_dirs(classified_dirs):
     """
     Aggregate subdirectory classifications to top-level directories.
 
-    Returns:
-        dict: {category: [{dir, confidence, reason}]}
-    """
-    top_level_groups = {}
+    doc_type が同一のサブディレクトリのみ集約する。
+    異なる doc_type を持つサブディレクトリは個別パスを保持する。
 
+    Returns:
+        dict: {category: [{dir, confidence, reason, doc_type}]}
+    """
+    # Phase 1: 各エントリの doc_type を事前計算
+    enriched = []
     for dir_path, category, confidence, reason in classified_dirs:
+        doc_type = estimate_doc_type(dir_path, category)
         parts = Path(dir_path).parts
         top_dir = parts[0] if parts else dir_path
-
-        key = (category, top_dir)
-        if key not in top_level_groups:
-            top_level_groups[key] = []
-        top_level_groups[key].append({
-            'dir': dir_path,
-            'confidence': confidence,
-            'reason': reason,
+        enriched.append({
+            'dir': dir_path, 'category': category,
+            'confidence': confidence, 'reason': reason,
+            'doc_type': doc_type, 'top_dir': top_dir,
         })
+
+    # Phase 2: (category, top_dir, doc_type) でグループ化
+    groups = {}
+    for entry in enriched:
+        key = (entry['category'], entry['top_dir'], entry['doc_type'])
+        groups.setdefault(key, []).append(entry)
+
+    # Phase 3: category 混在チェック
+    top_dir_categories = {}
+    for (category, top_dir, _), _ in groups.items():
+        top_dir_categories.setdefault(top_dir, set()).add(category)
 
     result = {'rules': [], 'specs': [], 'skip': [], 'mixed': []}
 
-    top_dir_categories = {}
-    for (category, top_dir), entries in top_level_groups.items():
-        if top_dir not in top_dir_categories:
-            top_dir_categories[top_dir] = set()
-        top_dir_categories[top_dir].add(category)
+    # Phase 4: グループごとに集約 or 個別パス
+    for (category, top_dir, doc_type), entries in groups.items():
+        is_mixed = len(top_dir_categories[top_dir]) > 1
 
-    for top_dir, categories in top_dir_categories.items():
-        if len(categories) == 1:
-            category = next(iter(categories))
-            entries = top_level_groups[(category, top_dir)]
-            if len(entries) > 1 or entries[0]['dir'] == top_dir:
-                best_confidence = max(e['confidence'] for e in entries)
-                reasons = [e['reason'] for e in entries]
-                result[category].append({
-                    'dir': f"{top_dir}/",
-                    'confidence': best_confidence,
-                    'reason': f"aggregated from {len(entries)} subdirs: {reasons[0]}",
-                })
-            else:
-                e = entries[0]
+        if is_mixed:
+            # category 混在 → 個別パス保持
+            for e in entries:
                 result[category].append({
                     'dir': f"{e['dir']}/",
                     'confidence': e['confidence'],
                     'reason': e['reason'],
+                    'doc_type': doc_type,
                 })
+        elif len(entries) > 1 or entries[0]['dir'] == top_dir:
+            # 同一 doc_type 複数サブディレクトリ → top_dir に集約
+            best_confidence = max(
+                (e['confidence'] for e in entries),
+                key=lambda c: _CONFIDENCE_ORDER.get(c, 0)
+            )
+            result[category].append({
+                'dir': f"{top_dir}/",
+                'confidence': best_confidence,
+                'reason': f"aggregated from {len(entries)} subdirs: {entries[0]['reason']}",
+                'doc_type': doc_type,
+            })
         else:
-            for category in categories:
-                entries = top_level_groups[(category, top_dir)]
-                for e in entries:
-                    result[category].append({
-                        'dir': f"{e['dir']}/",
-                        'confidence': e['confidence'],
-                        'reason': e['reason'],
-                    })
+            # 単一サブディレクトリ → 個別パス保持
+            e = entries[0]
+            result[category].append({
+                'dir': f"{e['dir']}/",
+                'confidence': e['confidence'],
+                'reason': e['reason'],
+                'doc_type': doc_type,
+            })
 
     return result
 
@@ -445,7 +459,7 @@ def build_doc_structure(classification):
         doc_types = {}
         for entry in entries:
             dir_path = entry['dir']
-            doc_type = estimate_doc_type(dir_path, category)
+            doc_type = entry.get('doc_type') or estimate_doc_type(dir_path, category)
 
             if doc_type not in doc_types:
                 doc_types[doc_type] = {'paths': []}
@@ -493,7 +507,7 @@ def output_yaml(classification):
             for entry in entries:
                 print(f"    - dir: {entry['dir']}")
                 print(f"      confidence: {entry['confidence']}")
-                print(f"      doc_type: {estimate_doc_type(entry['dir'], category)}")
+                print(f"      doc_type: {entry.get('doc_type') or estimate_doc_type(entry['dir'], category)}")
                 print(f"      reason: \"{entry['reason']}\"")
 
     for category in ('skip', 'mixed'):
@@ -515,7 +529,7 @@ def output_summary(classification):
             print(f"  {category}:")
             for e in entries:
                 dir_str = e['dir'].ljust(30)
-                doc_type = estimate_doc_type(e['dir'], category)
+                doc_type = e.get('doc_type') or estimate_doc_type(e['dir'], category)
                 print(f"    {dir_str} type={doc_type} ({e['confidence']}: {e['reason']})")
             has_output = True
 

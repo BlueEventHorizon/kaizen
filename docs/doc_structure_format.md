@@ -25,11 +25,13 @@ version: "1.0"
 specs:
   <doc_type>:
     paths: [<directory_path>, ...]
+    exclude: ["<dir_name>", ...]        # optional
     description: "<optional description>"
 
 rules:
   <doc_type>:
     paths: [<directory_path>, ...]
+    exclude: ["<dir_name>", ...]        # optional
     description: "<optional description>"
 ```
 
@@ -48,6 +50,7 @@ Each key under `specs` or `rules` is a **doc_type name** (e.g., `requirement`, `
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `paths` | Yes | array[string] | Directory paths (relative to project root). Glob patterns (`*`) supported |
+| `exclude` | No | array[string] | Directory names to exclude. Matches any path component with that name |
 | `description` | No | string | Human-readable description of this document type |
 
 ### Path Format
@@ -67,6 +70,21 @@ paths: ["specs/*/requirements/"]
 paths:
   - specs/requirements/
   - other_specs/requirements/
+```
+
+### Exclude Format
+
+- Each entry is a **directory name** (not a full path)
+- If any component of a resolved path matches an exclude name, that path is excluded
+- Useful for filtering glob pattern (`*`) expansion results
+
+```yaml
+# Exclude directories named "archived" or "_template" anywhere in matched paths
+exclude: ["archived", "_template"]
+
+# specs/login/requirements/     → included
+# specs/archived/requirements/  → EXCLUDED (contains "archived")
+# specs/_template/requirements/ → EXCLUDED (contains "_template")
 ```
 
 ## Recommended Doc Type Names
@@ -133,6 +151,24 @@ rules:
     paths: [rules/workflow/]
 ```
 
+### Feature-Based Structure (with exclude)
+
+```yaml
+version: "1.0"
+
+specs:
+  requirement:
+    paths: ["specs/*/requirements/"]
+    exclude: ["archived", "_template"]
+  design:
+    paths: ["specs/*/design/"]
+    exclude: ["archived"]
+
+rules:
+  rule:
+    paths: [rules/]
+```
+
 ### Mixed Structure
 
 ```yaml
@@ -180,6 +216,9 @@ Skills can query document locations without parsing YAML:
 
 /doc-structure:where
 → (shows all categories and paths)
+
+/doc-structure:where --resolve
+→ (all paths with globs expanded and excludes applied)
 ```
 
 ### For Scripts (direct YAML parsing)

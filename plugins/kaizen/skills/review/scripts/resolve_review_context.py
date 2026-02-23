@@ -107,28 +107,28 @@ def _parse_doc_structure_yaml(filepath):
                 current_field = None
                 continue
 
-            # indent=4: フィールド (paths, description)
+            # indent=4: フィールド (paths, exclude, description)
             if indent == 4 and current_category and current_doc_type:
                 if ':' in content and not content.startswith('- '):
                     key, val = _split_kv(content)
                     current_field = key
-                    if key == 'paths':
+                    if key in ('paths', 'exclude'):
                         if val.startswith('['):
-                            result[current_category][current_doc_type]['paths'] = _parse_flow_array(val)
+                            result[current_category][current_doc_type][key] = _parse_flow_array(val)
                             current_field = None
                         else:
-                            result[current_category][current_doc_type]['paths'] = []
+                            result[current_category][current_doc_type][key] = []
                     elif key == 'description':
                         result[current_category][current_doc_type]['description'] = val.strip('"\'')
-                elif content.startswith('- ') and current_field == 'paths':
-                    path_val = content[2:].strip().strip('"\'')
-                    result[current_category][current_doc_type].setdefault('paths', []).append(path_val)
+                elif content.startswith('- ') and current_field in ('paths', 'exclude'):
+                    item_val = content[2:].strip().strip('"\'')
+                    result[current_category][current_doc_type].setdefault(current_field, []).append(item_val)
                 continue
 
             # indent=6: ブロック配列要素
-            if indent == 6 and current_field == 'paths' and content.startswith('- '):
-                path_val = content[2:].strip().strip('"\'')
-                result[current_category][current_doc_type].setdefault('paths', []).append(path_val)
+            if indent == 6 and current_field in ('paths', 'exclude') and content.startswith('- '):
+                item_val = content[2:].strip().strip('"\'')
+                result[current_category][current_doc_type].setdefault(current_field, []).append(item_val)
                 continue
 
     return result if result.get('version') else None
@@ -159,6 +159,28 @@ def _doc_type_to_review_type(category, doc_type_name):
 
 
 # ---------------------------------------------------------------------------
+# Exclude 判定
+# ---------------------------------------------------------------------------
+
+def _is_excluded(path_str, exclude_list):
+    """パス内のいずれかのコンポーネントが exclude リストにマッチするか判定"""
+    if not exclude_list:
+        return False
+    parts = path_str.replace('\\', '/').split('/')
+    return any(part in exclude_list for part in parts)
+
+
+def _get_all_excludes(doc_structure, category):
+    """カテゴリ内の全 exclude 名を集約"""
+    if not doc_structure:
+        return set()
+    excludes = set()
+    for type_info in doc_structure.get(category, {}).values():
+        excludes.update(type_info.get('exclude', []))
+    return excludes
+
+
+# ---------------------------------------------------------------------------
 # パスマッチング・種別判定
 # ---------------------------------------------------------------------------
 
@@ -186,9 +208,11 @@ def detect_type_from_doc_structure(path_str, doc_structure):
     normalized = path_str.replace('\\', '/')
     for category in ('specs', 'rules'):
         for doc_type_name, type_info in doc_structure.get(category, {}).items():
+            exclude_list = type_info.get('exclude', [])
             for declared_path in type_info.get('paths', []):
                 if _path_matches_pattern(normalized, declared_path):
-                    return _doc_type_to_review_type(category, doc_type_name)
+                    if not _is_excluded(normalized, exclude_list):
+                        return _doc_type_to_review_type(category, doc_type_name)
     return None
 
 
@@ -223,6 +247,7 @@ def detect_features_from_doc_structure(project_root, doc_structure):
 
     features = set()
     for doc_type_name, type_info in doc_structure.get('specs', {}).items():
+        exclude_list = type_info.get('exclude', [])
         for path_pattern in type_info.get('paths', []):
             parts = path_pattern.rstrip('/').split('/')
             star_indices = [i for i, p in enumerate(parts) if p == '*']
@@ -241,6 +266,8 @@ def detect_features_from_doc_structure(project_root, doc_structure):
 
             for entry in prefix_dir.iterdir():
                 if not entry.is_dir() or entry.name.startswith('.'):
+                    continue
+                if entry.name in exclude_list:
                     continue
                 if suffix_parts:
                     check_path = entry
@@ -289,11 +316,13 @@ def _detect_generic_type(path_str, doc_structure=None):
     """generic 種別の判定（基盤文書パターン）"""
     # rules パスを doc_structure から動的取得
     rules_paths = get_rules_paths(doc_structure) if doc_structure else ['rules/']
+    rules_excludes = _get_all_excludes(doc_structure, 'rules')
     all_patterns = GENERIC_BASE_PATTERNS + rules_paths
 
     for pattern in all_patterns:
         if path_str.startswith(pattern) or f'/{pattern}' in path_str:
-            return "generic"
+            if not _is_excluded(path_str, rules_excludes):
+                return "generic"
 
     filename = Path(path_str).name
     if filename in GENERIC_ROOT_FILES and '/' not in path_str.rstrip('/'):
@@ -357,6 +386,9 @@ def find_feature_subdirs(project_root, doc_structure, feature):
         return available
 
     for doc_type_name, type_info in doc_structure.get('specs', {}).items():
+        exclude_list = type_info.get('exclude', [])
+        if feature in exclude_list:
+            continue
         review_type = _doc_type_to_review_type('specs', doc_type_name)
         for path_pattern in type_info.get('paths', []):
             if '*' not in path_pattern:
@@ -378,12 +410,16 @@ def find_target_files(project_root, doc_structure, feature, review_type):
     for doc_type_name, type_info in doc_structure.get('specs', {}).items():
         if _doc_type_to_review_type('specs', doc_type_name) != review_type:
             continue
+        exclude_list = type_info.get('exclude', [])
         for path_pattern in type_info.get('paths', []):
             if '*' not in path_pattern:
                 continue
             concrete = path_pattern.replace('*', feature, 1)
             pattern = str(project_root / concrete.rstrip('/') / '**' / '*.md')
             files = sorted(glob.glob(pattern, recursive=True))
+            # exclude フィルタ
+            files = [f for f in files if not _is_excluded(
+                str(Path(f).relative_to(project_root)), exclude_list)]
             if files:
                 return [str(Path(f).relative_to(project_root)) for f in files]
     return []
