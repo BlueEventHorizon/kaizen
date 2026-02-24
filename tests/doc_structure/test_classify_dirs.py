@@ -197,6 +197,23 @@ class TestFindMdDirs(_FsTestCase):
         dirs = [d for d, _ in result]
         self.assertEqual(dirs.count('docs'), 1)
 
+    def test_symlink_target_discovered(self):
+        """シンボリックリンク先のディレクトリが発見される"""
+        # プロジェクト外のディレクトリを作成し、プロジェクト内からシンボリックリンク
+        external_dir = Path(tempfile.mkdtemp())
+        try:
+            (external_dir / 'guide.md').write_text('# Guide', encoding='utf-8')
+            link_path = self.tmpdir / 'linked_docs'
+            try:
+                os.symlink(str(external_dir), str(link_path))
+            except (OSError, NotImplementedError):
+                self.skipTest('symlink を作成できない環境')
+            result = find_md_dirs(str(self.tmpdir))
+            dirs = [d for d, _ in result]
+            self.assertIn('linked_docs', dirs)
+        finally:
+            shutil.rmtree(external_dir, ignore_errors=True)
+
     def test_shallow_scan_stops_at_md_dir(self):
         """浅いスキャン: .md があるディレクトリの配下は探索しない"""
         self._write_file('specs/overview.md', '# Overview')

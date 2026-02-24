@@ -9,7 +9,7 @@ A Claude Code plugin marketplace for AI-powered code & document review, and proj
 | Plugin | Version | Description |
 |--------|---------|-------------|
 | **kaizen** | 0.0.3 | AI-powered code & document review with staged presentation and auto-fix |
-| **doc-structure** | 0.0.3 | Define and query project document structure (`.doc_structure.yaml`) |
+| **doc-structure** | 0.0.4 | Define and query project document structure (`.doc_structure.yaml`) |
 | **shell-utils** | 0.0.1 | Shell utility collection: Python environment detection, path formatting |
 
 ## Installation

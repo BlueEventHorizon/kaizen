@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Claude Code プラグインのマーケットプレイスリポジトリ。2つのプラグインを格納・配布する。
 
 - **kaizen** (v0.0.3) — AI を活用したコード・文書レビュー。段階的提示と自動修正に対応
-- **doc-structure** (v0.0.3) — `.doc_structure.yaml` によるプロジェクト文書構成の定義・クエリ
+- **doc-structure** (v0.0.4) — `.doc_structure.yaml` によるプロジェクト文書構成の定義・クエリ
 
 ## Development
 

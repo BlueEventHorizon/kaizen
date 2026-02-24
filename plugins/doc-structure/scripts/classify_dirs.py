@@ -70,9 +70,18 @@ def find_md_dirs(project_root):
     results = []
     root = Path(project_root)
     found_dirs = set()
+    visited_real = set()  # 循環検出用（realpath で追跡）
 
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
         current = Path(dirpath)
+        real_path = current.resolve()
+
+        # シンボリックリンクの循環検出
+        if real_path in visited_real:
+            dirnames[:] = []
+            continue
+        visited_real.add(real_path)
+
         rel = current.relative_to(root)
         rel_str = str(rel)
 
